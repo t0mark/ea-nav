@@ -1,0 +1,42 @@
+# VLN 데이터셋 구축 환경
+#
+# 사용법
+#   컨테이너 기동 : docker compose -f research/docker/docker-compose.yml up -d airlab_hw_mansion
+#   스크립트 실행 : docker exec airlab_hw_mansion bash -c \
+#                     'cd /workspace/research && vglrun -d egl0 python scripts/datasets/MANSION/00_test.py'
+#
+# 서비스는 목적당 하나만 둔다. 학습·검증 단계 착수 시점에 필요한 서비스를 추가한다.
+
+services:
+
+  # MANSION 멀티플로어 빌딩 환경 (패치 AI2-THOR + objathor 에셋, 실체 Stairs/Elevator)
+  # GPU 렌더링은 VirtualGL EGL 백엔드 사용: vglrun -d egl0 (egl0~3 = GPU 0~3)
+  airlab_hw_mansion:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: airlab_hw_mansion
+    runtime: nvidia
+    volumes:
+      - /home/ubuntu/jairlab/hw/research:/workspace/research
+      - /home/ubuntu/jairlab/data:/data
+      # AI2-THOR 바이너리 + objathor 에셋을 호스트에 영속 저장 (재시작 시 재다운로드 방지)
+      - /home/ubuntu/jairlab/data/MansionWorld/.ai2thor:/root/.ai2thor
+      - /home/ubuntu/jairlab/data/MansionWorld/.objathor-assets:/root/.objathor-assets
+      - /home/ubuntu/jairlab/data/MansionWorld/processed_models:/root/processed_models
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0,1,2,3
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - DISPLAY=:99
+      # torch 동봉 cuDNN이 기본 검색 경로 밖에 있어 GroundingDINO 등 GPU 추론이 실패함
+      - LD_LIBRARY_PATH=/opt/conda/lib/python3.11/site-packages/torch/lib
+      # PATH를 지정하면 Dockerfile의 ENV PATH(VirtualGL 포함)를 덮으므로 vglrun 경로를 함께 넣는다
+      - PATH=/opt/VirtualGL/bin:/opt/conda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    shm_size: "32gb"
+    command: >
+      bash -c "Xvfb :99 -screen 0 1280x720x24 -nolisten tcp &
+               sleep 1 && exec bash"
+    stdin_open: true
+    tty: true

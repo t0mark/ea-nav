@@ -1,0 +1,7 @@
+__pycache__/
+
+check/
+data/
+paper/
+
+.env*

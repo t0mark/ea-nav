@@ -1,0 +1,275 @@
+"""habitat-lab v0.1.7 ddppo ResNet 벤더링 (MIT, facebookresearch/habitat-lab).
+
+ETPNav depth 인코더 백본(gibson-2plus-resnet50.pth와 정확히 같은 구조)을
+habitat 설치 없이 쓰기 위한 발췌 — resnet.py 원문 + ResNetEncoder를
+depth 전용·torch 전용으로 각색(gym spaces 제거). 원문 수정 최소화.
+"""
+#!/usr/bin/env python3
+
+# Copyright (c) Facebook, Inc. and its affiliates.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+from typing import List, Optional, Type, Union, cast
+
+from torch import Tensor
+from torch import nn as nn
+from torch.nn import functional as F
+from torch.nn.modules.container import Sequential
+from torch.nn.modules.conv import Conv2d
+
+
+def conv3x3(
+    in_planes: int, out_planes: int, stride: int = 1, groups: int = 1
+) -> Conv2d:
+    """3x3 convolution with padding"""
+    return nn.Conv2d(
+        in_planes,
+        out_planes,
+        kernel_size=3,
+        stride=stride,
+        padding=1,
+        bias=False,
+        groups=groups,
+    )
+
+
+def conv1x1(in_planes: int, out_planes: int, stride: int = 1) -> Conv2d:
+    """1x1 convolution"""
+    return nn.Conv2d(
+        in_planes, out_planes, kernel_size=1, stride=stride, bias=False
+    )
+
+
+# BasicBlock/Bottleneck 공통 상위 타입 별칭
+Block = nn.Module
+
+
+class BasicBlock(nn.Module):
+    expansion = 1
+    resneXt = False
+
+    def __init__(
+        self,
+        inplanes,
+        planes,
+        ngroups,
+        stride=1,
+        downsample=None,
+        cardinality=1,
+    ):
+        super(BasicBlock, self).__init__()
+        self.convs = nn.Sequential(
+            conv3x3(inplanes, planes, stride, groups=cardinality),
+            nn.GroupNorm(ngroups, planes),
+            nn.ReLU(True),
+            conv3x3(planes, planes, groups=cardinality),
+            nn.GroupNorm(ngroups, planes),
+        )
+        self.downsample = downsample
+        self.relu = nn.ReLU(True)
+
+    def forward(self, x):
+        residual = x
+
+        out = self.convs(x)
+
+        if self.downsample is not None:
+            residual = self.downsample(x)
+
+        return self.relu(out + residual)
+
+
+def _build_bottleneck_branch(
+    inplanes: int,
+    planes: int,
+    ngroups: int,
+    stride: int,
+    expansion: int,
+    groups: int = 1,
+) -> Sequential:
+    return nn.Sequential(
+        conv1x1(inplanes, planes),
+        nn.GroupNorm(ngroups, planes),
+        nn.ReLU(True),
+        conv3x3(planes, planes, stride, groups=groups),
+        nn.GroupNorm(ngroups, planes),
+        nn.ReLU(True),
+        conv1x1(planes, planes * expansion),
+        nn.GroupNorm(ngroups, planes * expansion),
+    )
+
+
+
+
+class Bottleneck(nn.Module):
+    expansion = 4
+    resneXt = False
+
+    def __init__(
+        self,
+        inplanes: int,
+        planes: int,
+        ngroups: int,
+        stride: int = 1,
+        downsample: Optional[Sequential] = None,
+        cardinality: int = 1,
+    ) -> None:
+        super().__init__()
+        self.convs = _build_bottleneck_branch(
+            inplanes,
+            planes,
+            ngroups,
+            stride,
+            self.expansion,
+            groups=cardinality,
+        )
+        self.relu = nn.ReLU(inplace=True)
+        self.downsample = downsample
+
+    def _impl(self, x: Tensor) -> Tensor:
+        identity = x
+
+        out = self.convs(x)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        return self.relu(out + identity)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self._impl(x)
+
+
+
+
+
+class ResNet(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        base_planes: int,
+        ngroups: int,
+        block: Block,
+        layers: List[int],
+        cardinality: int = 1,
+    ) -> None:
+        super(ResNet, self).__init__()
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(
+                in_channels,
+                base_planes,
+                kernel_size=7,
+                stride=2,
+                padding=3,
+                bias=False,
+            ),
+            nn.GroupNorm(ngroups, base_planes),
+            nn.ReLU(True),
+        )
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.cardinality = cardinality
+
+        self.inplanes = base_planes
+        if block.resneXt:
+            base_planes *= 2
+
+        self.layer1 = self._make_layer(block, ngroups, base_planes, layers[0])
+        self.layer2 = self._make_layer(
+            block, ngroups, base_planes * 2, layers[1], stride=2
+        )
+        self.layer3 = self._make_layer(
+            block, ngroups, base_planes * 2 * 2, layers[2], stride=2
+        )
+        self.layer4 = self._make_layer(
+            block, ngroups, base_planes * 2 * 2 * 2, layers[3], stride=2
+        )
+
+        self.final_channels = self.inplanes
+        self.final_spatial_compress = 1.0 / (2 ** 5)
+
+    def _make_layer(
+        self,
+        block: Block,
+        ngroups: int,
+        planes: int,
+        blocks: int,
+        stride: int = 1,
+    ) -> Sequential:
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                conv1x1(self.inplanes, planes * block.expansion, stride),
+                nn.GroupNorm(ngroups, planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(
+            block(
+                self.inplanes,
+                planes,
+                ngroups,
+                stride,
+                downsample,
+                cardinality=self.cardinality,
+            )
+        )
+        self.inplanes = planes * block.expansion
+        for _i in range(1, blocks):
+            layers.append(block(self.inplanes, planes, ngroups))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x) -> Tensor:
+        x = self.conv1(x)
+        x = self.maxpool(x)
+        x = cast(Tensor, x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        return x
+
+
+
+def resnet50(in_channels: int, base_planes: int, ngroups: int) -> ResNet:
+    model = ResNet(in_channels, base_planes, ngroups, Bottleneck, [3, 4, 6, 3])
+
+    return model
+
+
+
+
+
+
+class DepthResNetEncoder(nn.Module):
+    """depth (B,H,W,1) → (B, C, S, S). ETPNav 규격: 256² 입력 → (B,128,4,4)."""
+
+    def __init__(self, depth_hw=256, baseplanes=32, ngroups=16,
+                 backbone="resnet50"):
+        super().__init__()
+        self._n_input_depth = 1
+        spatial_size = depth_hw // 2
+        self.running_mean_and_var = nn.Sequential()  # normalize 미사용(ETPNav)
+        self.backbone = globals()[backbone](1, baseplanes, ngroups)
+        final_spatial = int(spatial_size * self.backbone.final_spatial_compress)
+        after_compression_flat_size = 2048
+        num_compression_channels = int(
+            round(after_compression_flat_size / (final_spatial ** 2)))
+        self.compression = nn.Sequential(
+            nn.Conv2d(self.backbone.final_channels, num_compression_channels,
+                      kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(1, num_compression_channels),
+            nn.ReLU(True),
+        )
+        self.output_shape = (num_compression_channels, final_spatial,
+                             final_spatial)
+
+    def forward(self, depth):
+        """depth: (B, H, W, 1) [m 단위 0~1 정규화는 호출부 책임]."""
+        x = depth.permute(0, 3, 1, 2)
+        x = F.avg_pool2d(x, 2)
+        x = self.running_mean_and_var(x)
+        x = self.backbone(x)
+        return self.compression(x)
