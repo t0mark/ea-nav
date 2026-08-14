@@ -1,0 +1,5 @@
+# EA-Trav train 컨테이너
+# 초기에는 베이스 이미지만 사용하고, 의존성은 컨테이너 내부에서 검증한 뒤 이 파일에 반영한다 (빌드 최소화)
+FROM nvcr.io/nvidia/pytorch:24.02-py3
+
+WORKDIR /workspace/eatrav

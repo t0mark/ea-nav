@@ -1,0 +1,62 @@
+# EA-Trav 컨테이너 구성
+# - sim   : Isaac Lab 2.3.0 (기존 수동 생성 컨테이너를 문서화한 것. 재생성 시에만 compose 사용)
+# - train : PyTorch 학습·데이터 처리 (Dockerfile.train)
+# - utils : 기타 CPU 작업 - URDF 생성·검증, 데이터 수집 등 (Dockerfile.utils)
+# 공통 규칙: GPU 0-3번만 사용, 코드는 /workspace/eatrav, 대용량 산출물은 /data/EA-Trav
+
+name: eatrav
+
+# 서비스 공통 설정 (sim은 볼륨을 자체 정의하므로 volumes만 덮어씀)
+x-common: &common
+  working_dir: /workspace/eatrav
+  ipc: host
+  restart: unless-stopped
+  volumes:
+    - ../:/workspace/eatrav
+    - /home/ubuntu/jairlab/data:/data
+
+# GPU 0-3번 예약 (utils는 GPU 미사용)
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            device_ids: ["0", "1", "2", "3"]
+            capabilities: [gpu]
+
+services:
+  sim:
+    <<: [*common, *gpu]
+    image: nvcr.io/nvidia/isaac-lab:2.3.0
+    container_name: airlab_hw_eatrav_sim
+    entrypoint: ["/bin/bash", "-c", "sleep infinity"]
+    volumes:
+      - ../:/workspace/eatrav
+      - /home/ubuntu/jairlab/data:/data
+      - /home/ubuntu/jairlab/data/EA-Trav/isaac-cache/kit:/isaac-sim/kit/cache
+      - /home/ubuntu/jairlab/data/EA-Trav/isaac-cache/ov:/root/.cache/ov
+      - /home/ubuntu/jairlab/data/EA-Trav/isaac-cache/glcache:/root/.cache/nvidia/GLCache
+      - /home/ubuntu/jairlab/data/EA-Trav/isaac-cache/computecache:/root/.nv/ComputeCache
+    environment:
+      - ACCEPT_EULA=Y
+      - PRIVACY_CONSENT=Y
+
+  train:
+    <<: [*common, *gpu]
+    build:
+      context: .
+      dockerfile: Dockerfile.train
+    image: t0mark251/eatrav_train
+    container_name: airlab_hw_eatrav_train
+    command: ["sleep", "infinity"]
+    shm_size: "32gb"
+
+  utils:
+    <<: *common
+    build:
+      context: .
+      dockerfile: Dockerfile.utils
+    image: t0mark251/eatrav_utils
+    container_name: airlab_hw_eatrav_utils
+    command: ["sleep", "infinity"]

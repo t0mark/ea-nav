@@ -1,0 +1,14 @@
+# EA-Trav utils 컨테이너
+# URDF 생성·검증, 실로봇 URDF 수집 등 기타 CPU 작업용
+FROM python:3.10-slim
+
+# 실로봇 URDF 수집(git clone)과 기본 빌드에 필요한 도구
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git wget ca-certificates build-essential && \
+    rm -rf /var/lib/apt/lists/*
+
+# URDF 생성·정적 검사·렌더링·실로봇 수집 의존성 (컨테이너 내부 검증 완료분)
+RUN pip install --no-cache-dir \
+    numpy scipy pyyaml trimesh python-fcl yourdfpy matplotlib lxml xacro robot_descriptions pycollada
+
+WORKDIR /workspace/eatrav
