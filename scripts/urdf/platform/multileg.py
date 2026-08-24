@@ -4,8 +4,20 @@
 구조 축: 다리 개수(quad/hex), 장착(포유류형 mammal / 파충류형 sprawling),
 무릎 방향(elbow/knee, 다리 열별 독립), 세그먼트 수(2/3절),
 고관절 축 순서(mammal: roll-pitch / pitch-roll, sprawling: yaw-pitch — 실물 6족 coxa 구조),
-배치 비대칭 지터.
+다리 열 위치 지터(열 단위 — 좌우는 항상 미러).
 물리 제약: 기립 도달 가능성(고관절-발 유클리드 거리 기준), 기립고 부족 시 다리 자동 보정.
+
+좌우 대칭 규약: 배치·치수·관절 한계는 열(row) 단위로 1회 샘플하고 좌우에 미러로
+적용한다 (실로봇·레퍼런스 GenLoco/X-Nav/GenBot-1K 전부 대칭 — 관절 단위 독립
+샘플은 대칭 걸음 해가 없는 개체를 만들었던 결함). roll/yaw 축 관절의 가동 범위는
+미러 시 상·하한 마진을 교환한다 (xz평면 반사 대칭).
+
+토크·속도 한계 규약 (configs/urdf.yaml gait 섹션):
+- 토크 하한 = 스탠스(절반 다리 지지: quad 트롯 2 / hex 트라이포드 3) 정적 요구
+  x 여유율. 모멘트 팔 = max(기립 자세 수평 팔, arm_min_frac x 관절 아래 도달 길이)
+  — 보폭 자세에서 발이 관절 아래를 벗어나는 만큼의 하한 확보
+- 속도 하한 = vel_margin x 스윙 피크 요구 (pi x v_max / 다리 전장, duty 0.5
+  사인 스윙 근사. v_max = froude x sqrt(g x 기립고) — rl.yaml 명령 상한 규칙과 정합)
 
 기하 규약: base_link 원점 = 몸통 중심, 고관절 마운트는 몸통 옆면 중간 높이(z=0).
 세그먼트 링크는 자기 프레임 -z로 뻗고 (sprawling 대퇴는 +x), 회전 축 +y의 양의
@@ -14,10 +26,14 @@
 from __future__ import annotations
 
 import math
+import re
 
 import numpy as np
 
 from ..core.base import BaseGenerator, GeomSpec, GeomType, JointSpec, LinkSpec, RobotSpec
+
+# 관절 이름에서 (열, 좌우, 역할)을 분리하는 패턴: leg{row}{l|r}_{role}
+_LEG_JOINT = re.compile(r"^leg(\d+)([lr])_(.+)$")
 
 
 class MultilegGenerator(BaseGenerator):
@@ -30,8 +46,8 @@ class MultilegGenerator(BaseGenerator):
         """form(quad/hex)에 해당하는 다족보행 스펙 하나를 샘플링한다.
 
         샘플링 순서: 몸통 -> 세그먼트 길이(몸통 비례) -> 기립 자세 해석
-        -> 다리 조립 -> 관절 한계. 기립 자세를 먼저 풀어 다리가 짧으면
-        (몸통이 지면에 닿으면) 그 단계에서 보정한다.
+        -> 다리 조립(열 단위 샘플, 좌우 미러) -> 관절 한계. 기립 자세를 먼저
+        풀어 다리가 짧으면 (몸통이 지면에 닿으면) 그 단계에서 보정한다.
         """
         n_legs = 4 if form == "quad" else 6
         n_rows = n_legs // 2
@@ -61,20 +77,28 @@ class MultilegGenerator(BaseGenerator):
         knee_dirs = [int(rng.choice([1, -1])) for _ in range(n_rows)]
         axis_order = str(rng.choice(["roll_pitch", "pitch_roll"])) if mount == "mammal" else "yaw_pitch"
 
-        # 다리 조립: 열별 공칭 위치 + 다리마다 독립 지터(비대칭 허용)
+        # 다리 조립: 배치·마운트 오프셋은 열 단위 1회 샘플 -> 좌우 미러 적용
         x_nom = self._row_positions(n_rows, length)
+        d_mounts = []
         for row in range(n_rows):
-            for sy in (1, -1):
-                leg = f"leg{row}{'l' if sy > 0 else 'r'}"
-                x = x_nom[row] + rng.uniform(-0.06, 0.06) * length
-                if mount == "mammal":
-                    self._add_leg_mammal(spec, rng, leg, x, sy, width, seg_lens, leg_r,
-                                         foot_r, limb_density, knee_dirs[row], axis_order, pose)
-                else:
-                    self._add_leg_sprawl(spec, rng, leg, x, sy, width, seg_lens, leg_r,
-                                         foot_r, limb_density, knee_dirs[row], pose)
+            x = x_nom[row] + rng.uniform(-0.06, 0.06) * length
+            if mount == "mammal":
+                d_ab = max(width * rng.uniform(0.08, 0.25), leg_r + 0.015)
+                d_mounts.append(d_ab)
+                for sy in (1, -1):
+                    leg = f"leg{row}{'l' if sy > 0 else 'r'}"
+                    self._add_leg_mammal(spec, leg, x, sy, width, seg_lens, leg_r, foot_r,
+                                         limb_density, knee_dirs[row], axis_order, pose, d_ab)
+            else:
+                yaw_jit = rng.uniform(-0.25, 0.25)
+                d_cox = width * rng.uniform(0.06, 0.15)
+                d_mounts.append(d_cox)
+                for sy in (1, -1):
+                    leg = f"leg{row}{'l' if sy > 0 else 'r'}"
+                    self._add_leg_sprawl(spec, leg, x, sy, width, seg_lens, leg_r, foot_r,
+                                         limb_density, knee_dirs[row], pose, yaw_jit, d_cox)
 
-        self._set_limits(spec, rng, seg_lens, n_legs)
+        self._set_limits(spec, rng, seg_lens, n_legs, mount, axis_order, pose, stance, d_mounts)
         self._clamp_mass_ratio(spec)
         spec.params.update({
             "body_length": length, "body_width": width, "body_height": height,
@@ -100,30 +124,40 @@ class MultilegGenerator(BaseGenerator):
         pose = {"pitch","knee","ankle"} (mammal) / {"femur","beta"} (sprawl)
         """
         if mount == "mammal":
-            # 2링크 IK로 취급: l1 = 대퇴, l2 = 나머지 세그먼트 합(발목 0도로 폄)
+            # 2링크 IK 대상: l1 = 대퇴, l2 = 정강이. 3절은 마지막 세그먼트(l3)를
+            # 수직으로 세우는 지행(digitigrade) 지그재그 — 발목 0도 일직선 기립은
+            # 무릎-발목 열이 좌굴 특이점이라 시뮬에서 홀드 불안정 실측 (mammal
+            # 3절만 전도·요동, sprawl·2절·go2는 안정 — 홀드 진단 대조)
             l1 = seg_lens[0]
-            l2 = sum(seg_lens[1:])
+            l2 = seg_lens[1] if len(seg_lens) == 3 else sum(seg_lens[1:])
+            l3 = seg_lens[2] if len(seg_lens) == 3 else 0.0
 
-            # 도달 조건 |l1-l2| < h < l1+l2. 하한 = 몸통 바닥이 뜨는 높이,
-            # 상한 0.93(l1+l2)은 완전히 편 특이 자세 회피 마진
-            h_min = max(height / 2 - foot_r + 0.05, 1.05 * abs(l1 - l2))
+            # 도달 조건 |l1-l2| < h2 < l1+l2 (h2 = 고관절-발목 수직 낙차).
+            # 하한 = 몸통 바닥이 뜨는 높이 - 수직 l3, 상한 0.93(l1+l2)은 특이 자세 마진
+            h_min = max(height / 2 - foot_r + 0.05 - l3, 1.05 * abs(l1 - l2))
             if h_min > 0.93 * (l1 + l2):
                 scale = h_min / (0.93 * (l1 + l2)) * 1.15
                 seg_lens = [s * scale for s in seg_lens]
-                l1, l2 = l1 * scale, l2 * scale
-            h = float(np.clip((l1 + l2) * rng.uniform(0.6, 0.88), h_min, 0.93 * (l1 + l2)))
+                l1, l2, l3 = l1 * scale, l2 * scale, l3 * scale
+            h2 = float(np.clip((l1 + l2) * rng.uniform(0.6, 0.88), h_min, 0.93 * (l1 + l2)))
 
-            # 법코사인: h^2 = l1^2 + l2^2 + 2 l1 l2 cos(psi)
+            # 법코사인: h2^2 = l1^2 + l2^2 + 2 l1 l2 cos(psi)
             # (psi = 무릎 굽힘각, 0 = 곧게 폄, 무릎 내각 = pi - psi)
-            psi = math.acos(np.clip((h * h - l1 * l1 - l2 * l2) / (2 * l1 * l2), -1, 1))
+            psi = math.acos(np.clip((h2 * h2 - l1 * l1 - l2 * l2) / (2 * l1 * l2), -1, 1))
 
             # gamma = 수직선-대퇴 사이 각 (표준 2R IK 해).
-            # 고관절 피치 -gamma, 무릎 +psi를 주면 발이 고관절 바로 아래에 온다
+            # 고관절 피치 -gamma, 무릎 +psi를 주면 발목이 고관절 바로 아래에 온다
             gamma = math.atan2(l2 * math.sin(psi), l1 + l2 * math.cos(psi))
 
-            # 고관절이 몸통 중심 높이(z=0) -> 몸통 중심 높이 = h + 발 구체 반지름
-            stance = h + foot_r
-            return {"pitch": gamma, "knee": psi, "ankle": 0.0}, seg_lens, stance
+            # 발목 = gamma - psi: 조립이 관절각에 knee_dir을 곱하므로 아래 누적
+            # 피치 = knee_dir*(psi-gamma) + knee_dir*(gamma-psi) = 0 -> 마지막
+            # 세그먼트 수직 (지그재그 성립, knee_dir과 무관). IK 항등식
+            # l1 sin(gamma) = l2 sin(psi-gamma)로 발목은 고관절 바로 아래
+            ankle = gamma - psi if l3 > 0 else 0.0
+
+            # 고관절이 몸통 중심 높이(z=0) -> 몸통 중심 높이 = h2 + l3 + 발 구체 반지름
+            stance = h2 + l3 + foot_r
+            return {"pitch": gamma, "knee": psi, "ankle": ankle}, seg_lens, stance
 
         # sprawling: 대퇴는 바깥으로 femur만큼 내려가고 마지막 세그먼트는 수직
         femur = rng.uniform(0.25, 0.7)
@@ -160,17 +194,15 @@ class MultilegGenerator(BaseGenerator):
 
     # ---------- 포유류형 다리 ----------
 
-    def _add_leg_mammal(self, spec, rng, leg, x, sy, width, seg_lens, leg_r, foot_r,
-                        density, knee_dir, axis_order, pose):
+    def _add_leg_mammal(self, spec, leg, x, sy, width, seg_lens, leg_r, foot_r,
+                        density, knee_dir, axis_order, pose, d_ab):
         """포유류형 다리 조립: 힙 블록(2연쇄 고관절) + 수직 하강 세그먼트 체인.
 
         관절 구성: 몸통 -[roll|pitch]- 힙 블록 -[나머지 고관절]- 대퇴 -[knee]-
         (중간) -[ankle]- 말단. 기립 각도 부호: 고관절 피치 = -knee_dir*gamma,
         무릎 = +knee_dir*psi (knee_dir = 열별 elbow/knee 방향, IK 해는 부호 대칭).
+        d_ab = 어브덕션 오프셋 (열 단위 샘플 -> 좌우 공유, sample()에서 전달).
         """
-        # 힙 블록: 몸통 옆면에서 바깥으로 d_ab만큼 뻗는 어브덕션 오프셋.
-        # 하한 leg_r+여유 = 대퇴 실린더가 몸통 옆면을 뚫지 않는 조건
-        d_ab = max(width * rng.uniform(0.08, 0.25), leg_r + 0.015)
         blk = max(leg_r * 1.4, 0.02)
         hip = LinkSpec(f"{leg}_hip", [GeomSpec(GeomType.BOX, (blk, d_ab + blk, blk),
                                                origin_xyz=(0, sy * d_ab / 2, 0))])
@@ -220,20 +252,19 @@ class MultilegGenerator(BaseGenerator):
 
     # ---------- 파충류형 다리 ----------
 
-    def _add_leg_sprawl(self, spec, rng, leg, x, sy, width, seg_lens, leg_r, foot_r,
-                        density, knee_dir, pose):
+    def _add_leg_sprawl(self, spec, leg, x, sy, width, seg_lens, leg_r, foot_r,
+                        density, knee_dir, pose, yaw_jit, d_cox):
         """파충류형 다리 조립: 코사(z yaw) + 수평 대퇴(+x) + 수직 하강 체인.
 
-        마운트 yaw = sy*pi/2 (좌우로 90도) + 지터 -> 다리 로컬 +x가 몸통 바깥을
-        향한다. 회전 합성(모두 y축)은 누적되므로 마지막 세그먼트를 수직으로
+        마운트 yaw = sy*(pi/2 + yaw_jit) -> 다리 로컬 +x가 몸통 바깥을 향하고
+        좌우가 xz평면 미러가 된다 (yaw_jit·d_cox는 열 단위 샘플, sample()에서 전달).
+        회전 합성(모두 y축)은 누적되므로 마지막 세그먼트를 수직으로
         만드는 조건은 "y축 각도 합 = 0":
         - 2절: knee = -femur
         - 3절: knee = knee_dir*beta - femur, ankle = -knee_dir*beta
         고관절 축 순서 = yaw-pitch (실물 6족의 coxa yaw 구조, plan M4 반영).
         """
-        # 코사 yaw: 몸통 옆면에서 바깥(+x_local)을 향하도록 장착 (지터 = 앞뒤 벌림)
-        yaw = sy * math.pi / 2 + rng.uniform(-0.25, 0.25)
-        d_cox = width * rng.uniform(0.06, 0.15)
+        yaw = sy * (math.pi / 2 + yaw_jit)
         blk = max(leg_r * 1.4, 0.02)
         coxa = LinkSpec(f"{leg}_coxa", [GeomSpec(GeomType.BOX, (d_cox + blk, blk, blk),
                                                  origin_xyz=(d_cox / 2, 0, 0))])
@@ -296,22 +327,82 @@ class MultilegGenerator(BaseGenerator):
 
     # ---------- 한계 설정 ----------
 
-    def _set_limits(self, spec, rng, seg_lens, n_legs):
-        """관절 가동 범위·토크·속도 한계를 일괄 설정.
+    def _stance_arms(self, mount, axis_order, pose, seg_lens, d_ab):
+        """역할별 스탠스 모멘트 팔 [m] (기립 자세, 수직 GRF가 발에 걸릴 때).
 
-        가동 범위: 기립 각도를 중심으로 앞뒤 독립 마진 (기립이 항상 범위 안).
-        토크: 정적 중력 토크 스케일 tau_ref = (m g / 다리 수) x 다리 전장 기준,
-        원위 관절(무릎 0.8, 발목 0.6)은 부하가 작아 축소 계수를 곱한다.
+        mammal: 발이 둘째 고관절 바로 아래 -> 고관절 피치 팔 0, 첫 관절이 roll이면
+        팔 = 어브덕션 오프셋 d_ab (발이 roll 축에서 d_ab만큼 옆). 정강이는
+        수직에서 |gamma - psi| 기울어짐 -> 무릎 팔 = 정강이 x sin|gamma - psi|,
+        3절의 마지막 세그먼트는 수직(지행 기립) -> 발목 팔 0.
+        sprawl: 대퇴가 수평 성분 l1 cos(femur)를 만들고 (3절은 중간 세그 sin(beta)
+        추가), 마지막 세그먼트는 수직 -> 발목 팔 0. 수직 GRF는 yaw 토크 0.
+        반환 key는 관절 역할명 (hip_roll 등 — 첫/둘째 관절 구분 포함).
         """
-        m = spec.total_mass()
-        tau_ref = m * 9.81 / n_legs * sum(seg_lens)
-        for j in spec.actuated_joints():
-            # 기립 각도 중심으로 하한·상한 마진 독립 샘플 (클램프 ±2.9 rad)
-            center = spec.standing_pose.get(j.name, 0.0)
-            j.lower = float(np.clip(center - rng.uniform(0.45, 1.3), -2.9, 2.9))
-            j.upper = float(np.clip(center + rng.uniform(0.45, 1.3), -2.9, 2.9))
+        if mount == "mammal":
+            tilt = abs(math.sin(pose["pitch"] - pose["knee"]))
+            first, second = axis_order.split("_")
+            arms = {
+                f"hip_{first}": d_ab if first == "roll" else 0.0,
+                f"hip_{second}": 0.0,
+                "knee": seg_lens[1] * tilt,
+            }
+            if len(seg_lens) == 3:
+                arms["ankle"] = 0.0
+            return arms
+        horiz = seg_lens[0] * math.cos(pose["femur"])
+        mid = seg_lens[1] * math.sin(pose["beta"]) if len(seg_lens) == 3 else 0.0
+        arms = {"coxa_yaw": 0.0, "femur_pitch": horiz + mid, "knee": mid}
+        if len(seg_lens) == 3:
+            arms["ankle"] = 0.0
+        return arms
 
-            # 원위 관절 축소 계수 + 0.8-3.0배 여유율 샘플
-            distal = 0.8 if "knee" in j.name else (0.6 if "ankle" in j.name else 1.0)
-            j.effort = tau_ref * distal * rng.uniform(0.8, 3.0)
-            j.velocity = rng.uniform(5.0, 15.0)
+    def _set_limits(self, spec, rng, seg_lens, n_legs, mount, axis_order, pose, stance, d_mounts):
+        """관절 가동 범위·토크·속도 한계를 열 단위 샘플 + 좌우 미러로 설정.
+
+        토크 = 스탠스 하중 x 모멘트 팔 x 여유율 (모듈 docstring 규약):
+        F = m g / (n_legs/2) — 절반 다리 지지 (트롯/트라이포드), 팔은 기립 자세
+        수평 팔과 하한(arm_min_frac x 관절 아래 도달 길이) 중 큰 값.
+        속도 = U(스윙 피크 요구 x vel_margin, max(vel_hi, vel_span x 하한)).
+        가동 범위: 기립 각도 중심 마진 — roll/yaw 축은 우측에서 마진 교환 (미러).
+        """
+        g = self._cfg["gait"]
+        m = spec.total_mass()
+        support = m * 9.81 / (n_legs // 2)
+        leg_len = sum(seg_lens)
+
+        # 역할별 관절 아래 도달 길이 (팔 하한용): 고관절 = 다리 전장
+        reach = {"knee": sum(seg_lens[1:]), "ankle": sum(seg_lens[2:]) or 0.0}
+
+        # 스윙 피크 속도 요구: v_max = froude x sqrt(g h), omega = pi v / 다리 전장
+        v_max = g["froude"] * math.sqrt(9.81 * stance)
+        w_min = g["vel_margin"] * math.pi * v_max / leg_len
+        w_hi = max(g["vel_hi"], g["vel_span"] * w_min)
+
+        # 열 x 역할 단위로 1회 샘플해 좌우가 같은 값을 쓴다 (미러 규약)
+        drawn: dict[tuple, dict] = {}
+        stance_tau = spec.params.setdefault("stance_torque", {})
+        for j in spec.actuated_joints():
+            row, side, role = _LEG_JOINT.match(j.name).groups()
+            key = (row, role)
+            if key not in drawn:
+                arms = self._stance_arms(mount, axis_order, pose, seg_lens, d_mounts[int(row)])
+                arm = max(arms[role], g["arm_min_frac"] * reach.get(role, leg_len))
+                drawn[key] = {
+                    "lo": rng.uniform(0.45, 1.3), "up": rng.uniform(0.45, 1.3),
+                    "tau_req": support * arm,
+                    "effort": support * arm * rng.uniform(*g["stance_margin"]),
+                    "velocity": rng.uniform(w_min, w_hi),
+                }
+            d = drawn[key]
+            # 관절별 스탠스 정적 요구 [Nm] — 하위 단계(RL 게인 앵커)가 사용
+            stance_tau[j.name] = d["tau_req"]
+
+            # roll(x)/yaw(z) 축은 xz평면 미러가 상·하한을 교환한다 (pitch는 그대로)
+            lo, up = d["lo"], d["up"]
+            if side == "r" and (j.axis[0] != 0 or j.axis[2] != 0):
+                lo, up = up, lo
+            center = spec.standing_pose.get(j.name, 0.0)
+            j.lower = float(np.clip(center - lo, -2.9, 2.9))
+            j.upper = float(np.clip(center + up, -2.9, 2.9))
+            j.effort = d["effort"]
+            j.velocity = d["velocity"]

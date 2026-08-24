@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import math
+import re
 
 import numpy as np
 
@@ -68,12 +69,13 @@ class HumanoidGenerator(BaseGenerator):
         if arm_dof > 0:
             self._add_arms(spec, rng, torso_parent, tw, th, arm_dof, limb_density)
 
-        self._set_limits(spec, rng, l1, l2)
-        self._clamp_mass_ratio(spec)
-
         # 기립고 = 골반 반높이 + 고관절 연쇄 낙차 + 다리 수직 성분 + 발목 높이
+        # (관절 한계의 속도 하한이 기립고를 쓰므로 _set_limits보다 먼저 계산)
         stance = (ph / 2 + 2 * hip_off
                   + l1 * math.cos(gamma) + l2 * math.cos(knee - gamma) + ankle_h)
+
+        self._set_limits(spec, rng, l1, l2, gamma, knee, foot_dims, stance)
+        self._clamp_mass_ratio(spec)
         spec.params.update({
             "pelvis": [pd, pw, ph], "torso": [td, tw, th],
             "thigh_length": l1, "shin_length": l2, "leg_radius": leg_r,
@@ -330,35 +332,78 @@ class HumanoidGenerator(BaseGenerator):
 
     # ---------- 한계 설정 ----------
 
-    def _set_limits(self, spec, rng, l1, l2):
-        """관절 가동 범위·토크·속도 한계 설정.
+    def _set_limits(self, spec, rng, l1, l2, gamma, knee, foot_dims, stance):
+        """관절 가동 범위·토크·속도 한계를 역할 단위 샘플 + 좌우 미러로 설정.
 
-        토크 기준 tau_leg = m g (다리 전장) x 여유율: 한 다리로 몸 전체를
-        지탱하는 최악 조건 스케일. 관절별 축소 계수는 이름 부분 일치로 적용.
-        waist는 가동 범위를 생성 시 정했으므로 토크·속도만 별도 설정.
+        다리 토크 = 단일 지지(F = m g — 보행 스윙 국면은 한 다리가 전 체중 지탱)
+        정적 요구 x 여유율 (configs/urdf.yaml gait 규약, multileg와 동일 원칙):
+        모멘트 팔 = max(기립 자세 수평 팔, arm_min_frac x 관절 아래 도달 길이).
+        발목은 발 지렛대(CoP 이동 범위 = 발 길이/폭의 절반)가 물리적 팔.
+        다리 속도 하한 = vel_margin x 스윙 피크 요구 (pi x v_max / 다리 전장,
+        v_max = froude_biped x sqrt(g x 기립고)).
+        팔·waist는 비로코모션 (롤아웃 홈 포즈 PD 홀드)이라 종전 스케일 계수
+        규칙 유지 — 단 좌우는 미러 (역할 단위 1회 샘플).
+        roll/yaw 축 관절의 가동 범위는 우측에서 마진을 교환한다 (xz평면 반사).
         """
+        g = self._cfg["gait"]
         m = spec.total_mass()
-        tau_leg = m * 9.81 * (l1 + l2) * rng.uniform(0.6, 2.0)
-        scale = {"knee": 0.9, "ankle": 0.6, "hip_yaw": 0.7, "hip_roll": 0.8,
-                 "shoulder": 0.25, "elbow": 0.15, "wrist": 0.08}
-        for j in spec.actuated_joints():
-            center = spec.standing_pose.get(j.name, 0.0)
+        weight = m * 9.81
+        leg_len = l1 + l2
 
-            # waist는 가동 범위를 _add_torso에서 이미 정했으므로 제외
+        # 기립 자세 수평 팔: 정강이 기울기 |sin(knee - gamma)| (발은 고관절 바로 아래),
+        # 발목은 발 접촉면의 CoP 이동 반범위
+        tilt = abs(math.sin(knee - gamma))
+        arms = {"hip_yaw": 0.0, "hip_roll": 0.0, "hip_pitch": 0.0,
+                "knee": l2 * tilt, "ankle_pitch": foot_dims[0] / 2, "ankle_roll": foot_dims[1] / 2}
+        reach = {"hip_yaw": leg_len, "hip_roll": leg_len, "hip_pitch": leg_len, "knee": l2}
+
+        # 스윙 피크 속도 요구 (multileg와 동일 근사, biped froude)
+        v_max = g["froude_biped"] * math.sqrt(9.81 * stance)
+        w_min = g["vel_margin"] * math.pi * v_max / leg_len
+        w_hi = max(g["vel_hi_biped"], g["vel_span"] * w_min)
+
+        # 비로코모션(팔) 스케일 계수 (종전 규칙 유지 — 기준 토크만 체중 x 다리 전장)
+        arm_scale = {"shoulder": 0.25, "elbow": 0.15, "wrist": 0.08}
+
+        # 역할(이름에서 좌우 접두사 제거) 단위로 1회 샘플 -> 좌우 동일 값 (미러 규약)
+        drawn: dict[str, dict] = {}
+        stance_tau = spec.params.setdefault("stance_torque", {})
+        for j in spec.actuated_joints():
             if j.name == "waist":
                 continue
+            role = re.sub(r"^[lr]_", "", j.name)
+            if role not in drawn:
+                if role in arms:
+                    # 다리: 스탠스 요구 앵커
+                    arm = max(arms[role], g["arm_min_frac"] * reach.get(role, 0.0))
+                    effort = weight * arm * rng.uniform(*g["stance_margin"])
+                    velocity = rng.uniform(w_min, w_hi)
+                    tau_req = weight * arm
+                else:
+                    # 팔: 종전 스케일 규칙 (스탠스 요구 없음 — tau_req 미기록)
+                    k = next((v for key, v in arm_scale.items() if key in role), 0.1)
+                    effort = weight * leg_len * k * rng.uniform(0.5, 2.5)
+                    velocity = rng.uniform(4.0, 12.0)
+                    tau_req = None
+                drawn[role] = {"lo": rng.uniform(0.45, 1.3), "up": rng.uniform(0.45, 1.3),
+                               "effort": effort, "velocity": velocity, "tau_req": tau_req}
+            d = drawn[role]
+            # 다리 관절별 스탠스 정적 요구 [Nm] — 하위 단계(RL 게인 앵커)가 사용
+            if d["tau_req"] is not None:
+                stance_tau[j.name] = d["tau_req"]
 
-            # 기립 각도 중심으로 하한·상한 마진 독립 샘플 (클램프 ±2.9 rad)
-            j.lower = float(np.clip(center - rng.uniform(0.45, 1.3), -2.9, 2.9))
-            j.upper = float(np.clip(center + rng.uniform(0.45, 1.3), -2.9, 2.9))
+            # roll(x)/yaw(z) 축은 xz평면 미러가 상·하한을 교환한다 (pitch는 그대로)
+            lo, up = d["lo"], d["up"]
+            if j.name.startswith("r_") and (j.axis[0] != 0 or j.axis[2] != 0):
+                lo, up = up, lo
+            center = spec.standing_pose.get(j.name, 0.0)
+            j.lower = float(np.clip(center - lo, -2.9, 2.9))
+            j.upper = float(np.clip(center + up, -2.9, 2.9))
+            j.effort = d["effort"]
+            j.velocity = d["velocity"]
 
-            # 관절 이름 부분 일치로 축소 계수 검색 (없으면 1.0)
-            k = next((v for key, v in scale.items() if key in j.name), 1.0)
-            j.effort = tau_leg * k * rng.uniform(0.8, 2.0)
-            j.velocity = rng.uniform(4.0, 12.0)
-
-        # waist 토크·속도는 별도 샘플
+        # waist 토크·속도는 별도 샘플 (가동 범위는 _add_torso에서 설정)
         if any(j.name == "waist" for j in spec.joints):
             waist = next(j for j in spec.joints if j.name == "waist")
-            waist.effort = tau_leg * rng.uniform(0.5, 1.5)
+            waist.effort = weight * leg_len * rng.uniform(0.5, 1.5)
             waist.velocity = rng.uniform(3.0, 8.0)

@@ -1,0 +1,332 @@
+# legged RL 학습 설정 (scripts/sim/controller/legged/ — form당 정책 1개)
+# 원칙: plan/urdf.md — 임계값·게인 상수는 config로 관리.
+# obs·morph·cmd·gains·env의 action/decimation은 bundle.json에 저장되어
+# 배포(LeggedRobotController)가 같은 값을 재현한다 — 학습 후 변경 금지
+# (변경하면 기존 번들과 규약이 어긋난다. 재학습과 함께만 변경).
+
+# 학습 환경 (train/train_env.py)
+env:
+  # 지형 모드: rough = 표준 세팅 (커리큘럼 지형 + 높이 스캔), flat = 디버그 폴백
+  terrain: rough
+  # 물리 스텝 (s) — sim.yaml sim_run.physics_dt와 일치해야 함 (배포 검증 항목)
+  physics_dt: 0.005
+  # 제어 주기 = physics_dt x decimation (50Hz — 로코모션 RL 관례)
+  decimation: 4
+  # 에피소드 길이 (s)
+  episode_len_s: 20.0
+  # 속도 명령 재샘플 주기 (s) — Isaac velocity 원본과 동일 10s. 5s는 에피소드
+  # (20s)당 방향 전환 4회로 순변위가 커리큘럼 승급 문턱(반 칸 4m)을 구조적으로
+  # 못 넘는 것 실측 (400 iter 레벨 0.0 고착)
+  resample_cmd_s: 10.0
+  # 액션 = 기립 자세 대비 관절각 오프셋 x action_scale (rad), 클립 = ±값
+  action_scale: 0.25
+  action_clip: 3.0
+  # 리셋 분포 (스톡 go2 오버라이드 정합 — 최종 정정: velocity 베이스
+  # 클래스의 험한 리셋(관절 0.5-1.5배·속도 ±0.5·푸시)은 go2 전용 cfg가
+  # 도로 끈다 (reset_joints scale (1,1)·velocity 전부 0·push None). 역이식
+  # 성공 세팅의 리셋 = 포즈 xy ±0.5 / yaw ±π 뿐. 전도 압력의 진짜 원천은
+  # 리셋이 아니라 DCMotor 포화 동역학 (env.actuator_model))
+  reset_joint_scale: [1.0, 1.0]
+  reset_pos_xy_noise: 0.5
+  yaw_noise: 3.14
+  reset_vel_noise: 0.0
+  # 주기 푸시: 스톡 go2는 push_robot = None (베이스 클래스 10-15s 푸시를
+  # 끔) — 정합 위해 비활성
+  push_interval_s: 100000.0
+  push_max_vel: 0.5
+  # 액추에이터 모델: dcmotor = 속도-토크 포화 (스톡 Unitree 표준 — 고속
+  # 관절 운동에서 가용 토크가 줄어 순응·전도가 물리적으로 존재. implicit
+  # 무포화 PD는 전도가 구조적으로 희소해 "기립 고착"의 동역학 축이었음.
+  # robot_spawn._dcmotor_actuators — 조인트별 URDF effort/velocity 사용)
+  actuator_model: dcmotor
+  # 조기 종료: 베이스(루트 링크) 접촉력 문턱 (N — legged_gym 표준 종료,
+  # 이력 3틱 max 판정), 몸통 기울기 상한 (deg — 접촉 없는 전복 보강),
+  # 기립고 붕괴 비율 (베이스 높이 < 기립고 x 비율 -> 종료. 0 = 비활성:
+  # 관절 스케일 리셋(0.5-1.5배 접힘 스폰)과 양립 불가 실측 — 웅크림 스폰이
+  # 0.2s 만에 높이 컷에 걸려 회복 경험이 통째로 즉사 루프가 된다 (rsl-rl
+  # 에피소드 11스텝 고착). 무릎 보행 차단은 undesired_contact로 복귀 예정)
+  contact_force_thresh: 1.0
+  # 180 = 기울기 종료 비활성 (스톡 go2는 베이스 접촉 단일 종료 — 전복은
+  # 200Hz 이력 베이스 접촉이 잡는다. 클론 검증 후 지형에서 재검토)
+  max_tilt_deg: 180.0
+  term_height_ratio: 0.0
+  # 종료 유예 (리셋 후 스텝 수, 0 = 유예 없음 — 스톡 정합. 스폰 착지 충격
+  # 종료는 억압 대상이 아니라 "무너짐 = 즉시 끝" 가치 신호의 원천)
+  termination_grace_steps: 0
+  # 명령 샘플: vx 하한 비율 (후진), vy 상한 비율, 정지 명령 확률
+  # (0.15는 min_cmd_norm 제로화와 합쳐 기립 데이터 ~20%가 되어 기립
+  # 어트랙터를 강화 — 스톡 rel_standing_envs 0.02로 정렬)
+  # 스톡 go2 명령 범위 정합: vx (-1,1) 대칭·vy ±1 (이전 0.5/0.3은 우리
+  # 임의 축소 — 클론 검증 후 멀티 임바디먼트에서 재검토)
+  back_ratio: 1.0
+  vy_ratio: 1.0
+  zero_cmd_prob: 0.02
+  # 평지 폴백의 스폰 격자 간격 (m) — 최대 개체(전장 약 1.9m) 상호 간섭 방지
+  spacing: 5.0
+  # legged 스폰 물리 (보행 RL 표준 정렬 — Isaac Unitree/ANYmal 자산 전 계열):
+  # 셀프 충돌 끔 (스윙 극단의 다리-몸통 유령 접촉이 걸음 탐색 방해),
+  # 솔버 반복 위치 4 / 속도 0. sim_run.self_collision(True)은 wheeled 전용으로 유지
+  self_collision: false
+  solver_iters: [4, 0]
+
+# 높이 스캔 (train_env RayCaster + low_rl.scan_obs — 표준 measured heights)
+# 격자 크기·해상도는 전 로봇 공통 (ANYmal 관례 1.6 x 1.0m, 0.1m -> 187 레이).
+# size는 resolution의 배수여야 한다 (low_rl.scan_rays 규약)
+scan:
+  size: [1.6, 1.0]
+  resolution: 0.1
+  # 센서 시작 고도 오프셋 (m — 위에서 하향 레이)
+  offset_z: 20.0
+  # 관측 클립 (m — 스캔 규약: 0 = 기립 높이의 평지)
+  clip: 1.0
+
+# 로코모션 관절 스폰 게인 (low_rl.loco_gain_overrides — 학습·배포 공용)
+# 질량 비례 규칙: kp = kp_per_kg x 총질량을 [kp_min, kp_max]로 클램프,
+# kd = kd_ratio x kp. 근거 = GenLoco(kp ≈ 8 x 질량)·ManyQuadrupeds 질량
+# 계층표 교차 검증 (독립 검증 보고). 이전 토크 한계 비례 규칙은 생성
+# 로봇의 관대한 토크 한계에서 과강성 -> 탐색 노이즈 요동·전도 실측
+# 계수 앵커 = 보행 실증 4족 실값 수렴대 (라운드 7 조사: A1 2.1x, Go2 1.7x,
+# ANYmal 1.5x/0.8x, Spot 1.8x — GenLoco 8x는 모션 모방 계열 이상치로 판명.
+# 8x는 순응 접지를 차단해 보행 창발 실패의 상시 구조 요인이었음)
+gains:
+  kp_per_kg: 2.0
+  kp_min: 20.0
+  kp_max: 1400.0
+  kd_ratio: 0.025
+
+# 속도 명령 경계 규칙 (low_rl.cmd_limits — 학습 샘플·배포 클램프 공용)
+# v_max = froude x sqrt(g x 기립 높이)를 [v_min, v_cap]로 클램프 (m/s)
+cmd:
+  froude: 0.6
+  v_min: 0.3
+  v_cap: 2.0
+  # yaw 명령 = heading P제어 (스톡 velocity cfg 정렬 — wz를 목표 방위각
+  # 오차에서 유도: wz = clip(kp x 오차, ±wz_max). 독립 wz ±1.5 10s 홀드는
+  # 병진+선회 동시 추적을 강제하는 보상 사막이 되는 것 diff 판정)
+  heading_command: true
+  heading_kp: 0.5
+  # yaw 각속도 상한 (rad/s — heading 클립과 동일값, 스톡 정렬)
+  wz_max: 1.0
+  # 명령 속도 커리큘럼 (legged_gym command curriculum): env별 상한을
+  # v_start에서 시작해 "에피소드 평균 추적 성적 > threshold"일 때 step만큼
+  # 확장 (v_max까지). 시그마 0.25의 추적 보상은 능력 밖 고속 명령에서
+  # 기울기가 0이라, 처음부터 전 범위를 샘플하면 경험 대부분이 학습 신호
+  # 없는 보상 사막이 되는 것 실측 (quad 파일럿 — 기립 고착의 잔여 원인)
+  # 시작 0.5는 평균 |명령| 0.25가 되어 "정지 track 0.78"인 무압력 분포를
+  # 만드는 것 실측 (걷기의 한계 이득 소멸 — 기립 국소해의 최종 기전).
+  # legged_gym 평지가 처음부터 ±1.0을 쓰는 이유 — 정지를 0점으로 만들어
+  # 이동을 강제. 1.0이면 소형 quad(v_max 1.0)는 곧장 전 범위
+  curriculum_v_start: 1.0
+  curriculum_v_step: 0.25
+  # 0.8은 유효 스텝 채점(라운드 4 강화)과 결합하면 원본보다 실질 과엄 —
+  # rough에서 600 iter에 확장 1-2회로 동결 실측 -> 0.7 (라운드 6 합의)
+  curriculum_track_threshold: 0.7
+  # 채점용 명령 하한 (m/s): 정지 track = exp(-|cmd|²/0.25)가 |cmd| < 0.30
+  # 에서 문턱 0.7을 넘는 무임 대역을 닫는다 (0.35 -> 정지 0.61 < 0.7.
+  # 라운드 7 실측 — 기립 개체가 최다 확장하는 채점 오염의 원인)
+  curriculum_score_min_cmd: 0.35
+  # 미세 수평 명령 제로화 문턱 (m/s — legged_gym 원본 0.2: 추적 불가능한
+  # 크리프 명령을 정지 명령으로 정리. wz는 유지)
+  min_cmd_norm: 0.2
+  # 배포(pure pursuit) 명령 상한 = deploy_ratio x 학습 v_max — 학습 분포의
+  # 최상단 속도를 상시 명령하면 추적 보상이 0에 가까운 영역이라 정책이
+  # 얼어붙는 것 실측 (quad 파일럿). 잘 추종되는 중속 대역으로 낮춘다
+  deploy_ratio: 0.7
+
+# 학습 관측 노이즈 (스톡 velocity cfg corruption 값 — 원시 단위, 스케일 전).
+# 무노이즈면 결정적 정지 자세가 관측 공간의 완전한 고정점이 되어 정밀
+# 정지 과적합을 허용 (diff 3위 후보). 배포는 무노이즈 (스톡 play와 동일)
+obs_noise:
+  enabled: true
+  lin_vel: 0.1
+  ang_vel: 0.2
+  gravity: 0.05
+  joint_pos: 0.01
+  joint_vel: 1.5
+
+# 관측 스케일 (low_rl.assemble_obs). 전부 1.0 = 스톡 정합 (Isaac Lab
+# velocity 관측은 무스케일 원시값 — 2.0/0.25/0.05 스케일은 legged_gym
+# 계열 관례로 스톡 클론 검증에서 제외. 정규화 없는 원시 관측 + corruption
+# 노이즈가 검증된 조합)
+obs:
+  lin_vel: 1.0
+  ang_vel: 1.0
+  joint_pos: 1.0
+  joint_vel: 1.0
+  height_scan: 1.0
+  # Run E 진단: 형태 벡터·스캔 제외 (상수 패딩 370차원의 영향 분리 —
+  # 스톡 48차원 형상 정렬. 멀티 임바디먼트 복원 시 되켤 것)
+  include_morph: false
+  include_scan: false
+
+# 형태 벡터 정규화 스케일 (low_rl._morph_vector — 로봇 간 고정 스케일)
+morph:
+  # 길이류 (m), 각도류 (rad), 관절 속도 (rad/s)
+  len_scale: 1.0
+  ang_scale: 3.1416
+  vel_scale: 30.0
+  # log10(질량 kg), log1p(토크 Nm)의 나눗값
+  mass_log_scale: 2.5
+  effort_log_scale: 6.0
+
+# 보상 가중치·시그마 (train/rewards.py — 합산 후 제어 주기 dt 곱)
+rewards:
+  # 총보상 하한 0 클립 (legged_gym only_positive_rewards): 스텝당 보상이
+  # 순음수면 "빨리 넘어져 에피소드를 끝내는" 자멸 정책이 최적이 된다.
+  # run-5 실측 재확인: 클론 보상의 초기 순수익 -16/에피소드에서 700-1300
+  # iter 즉사 루프 (0.5s) 재발 — 스톡이 클립 없이 버티는 건 에피소드가
+  # 초반부터 짧아(조기 전도 창발) 음수 누적이 작기 때문. 우리 로봇은 안
+  # 넘어져 20s 내내 누적하므로 클립 필수 (Run D의 제거가 오히려 탈정합)
+  only_positive_rewards: true
+  # 조기 종료(전도) 이벤트당 고정 감점 — 클립 "뒤"에 적용 (Isaac H1/G1
+  # termination_penalty 계열). 4족 기본 0: legged_gym 4족은 종료 감점이
+  # 없고, -1도 "걷기 시도(초기엔 자주 넘어짐)"의 비용이 되어 기립 고수를
+  # 강화하는 것 실측 — 자멸 유인은 only_positive 클립이 이미 차단.
+  # humanoid는 forms 오버라이드 -4 유지 (능동 균형 form은 전도 비용 필수)
+  termination: 0.0
+  # 페널티 항 선형 램프 구간 (iteration — URMA식 커리큘럼): 초기 탐색
+  # 구간의 페널티를 0에서 선형 증가시켜 "페널티가 추적을 압도 -> 클립 0
+  # 고착 -> 기울기 소멸 -> 붕괴" (파일럿 iter 265-300 실측)를 구조적으로
+  # 방지. 덕분에 dof_acc·action_rate는 반값 완화 대신 표준값 유지
+  # Run D: 0 = 램프 없음 (스톡은 첫 스텝부터 풀 페널티)
+  penalty_ramp_iters: 0
+  # 추적 속도원: false = 순간 몸체 속도 (스톡 정합 — 스톡 클론 판정).
+  # true = 제어 주기 평균 속도 (변위/시간 — 진동 위조 방지 변형이었으나
+  # 낙하·회복 국면에서 액션-보상 인과가 흐려져 크레딧 할당이 무뎌진다)
+  track_avg_vel: false
+  track_lin_sigma: 0.25
+  track_ang_sigma: 0.25
+  track_lin: 1.5
+  track_ang: 0.75
+  lin_vel_z: -2.0
+  ang_vel_xy: -0.05
+  # 지형 학습에서는 몸통이 경사를 따라야 하므로 평지보다 약하게 (RL 원본
+  # rough cfg는 0 — 형태 다양성 때문에 약한 직립 유도는 남긴다)
+  orientation: -2.5
+  # 토크 한계 정규화 비율의 L2 (로봇 규모 불변 — rewards.py docstring)
+  # Run S: 스톡 절대 토크 -2e-4 x tau^2의 go2 환산 (-2e-4 x 23.5^2)
+  torque: -0.11
+  # legged_gym 표준값 (반값 완화는 게인 과강성의 증상 완화였음 — 게인
+  # 질량 비례 교체 + 페널티 램프로 표준 복원. 독립 검증 권고)
+  dof_acc: -2.5e-7
+  action_rate: -0.01
+  # 관절 soft 한계(가동 범위 x 비율) 침범 페널티 (0 = 미사용, form 오버라이드)
+  dof_soft_ratio: 0.9
+  dof_pos_limits: 0.0
+  # 고관절 yaw/roll 기립 이탈 L1 (0 = 미사용 — humanoid 오버라이드)
+  joint_deviation: 0.0
+  # 발 체공 시간 (4족·6족, legged_gym 표준): 접지 순간 (체공 - 문턱 s) 합산,
+  # 수평 명령 크기 < deadband(m/s)면 0 (제자리 기립에 걸음 강요 방지).
+  # 0.125(Isaac값)는 클립 기반 레시피에서 걷기 유인 부족 — legged_gym
+  # 원본값 1.0으로 (라운드 7 예약 레버: 무보행 지속 시 상향)
+  feet_air_time: 0.25
+  # 체공 문턱 = scale x sqrt(기립고/g) [min, max] 클램프 (s) — 고정 0.5s는
+  # 소형 로봇(기립 0.28m -> 자연 체공 ~0.3s)의 물리적 정상 걸음까지 전부
+  # 벌점이 되어 "안 걷는 게 최적"이 되는 크기 비스케일 함정 실측.
+  # scale 2.1은 ANYmal(기립 0.55m) 대입 시 0.49로 원본 0.5와 정합
+  feet_air_thresh_scale: 2.1
+  feet_air_thresh_min: 0.5
+  feet_air_thresh_max: 0.5
+  cmd_deadband: 0.1
+  # 2족 전용 (Isaac H1/G1 표준): single-stance 지속 보상 (문턱 클램프) —
+  # 두 발 동시 점프·끌기 차단. 발 미끄럼 페널티(스케이팅 억제) 동반
+  feet_air_time_biped: 0.25
+  feet_air_threshold_biped: 0.4
+  feet_slide: -0.25
+  # 다리 중간 링크(허벅지·정강이) 접촉 페널티 — 무릎 보행 차단 (접촉 링크 수당)
+  # Run S: 스톡 go2는 undesired 페널티 없음
+  undesired_contact: 0.0
+
+# PPO·네트워크 (train/ppo.py — rsl-rl 표준 하이퍼파라미터)
+ppo:
+  num_steps_per_env: 24
+  # Run E: 스톡 flat 네트 형상 정렬
+  hidden_dims: [128, 128, 128]
+  activation: elu
+  # 스톡 go2 정합 1.0. (과거 0.8 하향 근거였던 "std 1.0 고정 실측"은
+  # 종료가 죽은 구 환경의 증거 — 리셋·종료 정합 후 무효. code.md)
+  init_noise_std: 1.0
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  clip_param: 0.2
+  gamma: 0.99
+  lam: 0.95
+  value_loss_coef: 1.0
+  # 스톡 go2 정합 0.01 (과거 0.002 하향 근거도 구 환경 증거라 무효 — 위와 동일)
+  entropy_coef: 0.01
+  # 탐색 std 상한 선형 어닐링 목표 (init_noise_std -> 이 값, 학습 종료
+  # 시점 도달. null = 끔). 0.8 -> 0.2 어닐링은 상한 0.44 부근에서 정책
+  # 전면 붕괴 실측 (노이즈 의존 보행이 이식되지 않고 소멸) — 보행이
+  # 강해진 뒤 완만 목표로 재시도할 것
+  std_anneal_to: null
+  learning_rate: 1.0e-3
+  max_grad_norm: 1.0
+  schedule: adaptive
+  desired_kl: 0.01
+
+# form별 오버라이드 (ppo._merge_form_cfg가 기본값 위에 깊은 병합 —
+# 병합 결과가 bundle.json에 저장되어 배포도 form별 값을 재현).
+# humanoid 값의 출처 = Isaac Lab H1/G1 velocity cfg (독립 검증 조사):
+# 종료 -4/이벤트, 직립 -1.0, 수직 속도 페널티 0 (2족 보행은 수직 진동 필수),
+# 고관절 yaw/roll 이탈·관절 한계 페널티, 명령 전진 전용 저속(vx ≤ 1.0),
+# 게인 = 질량 x 4 (H1 환산) + 발목 별도 하향 (H1 발목 kp 20 관례)
+forms:
+  humanoid:
+    # 명령 샘플 비율(후진·측방)은 env 섹션 소관 — cmd에 두면 죽은 키가
+    # 된다 (_sample_commands는 env에서 읽음. 라운드 2 검증 지적)
+    env:
+      back_ratio: 0.0
+      vy_ratio: 0.0
+    rewards:
+      termination: -4.0
+      orientation: -1.0
+      lin_vel_z: 0.0
+      joint_deviation: -0.2
+      dof_pos_limits: -1.0
+    cmd:
+      froude: 0.35
+      v_cap: 1.0
+      wz_max: 1.0
+    gains:
+      kp_per_kg: 4.0
+      ankle_kp_per_kg: 0.5
+      kd_ratio: 0.03
+      # 발목 감쇠는 별도 상향 (H1 발목 kp20/kd4.0 관례 — kp 비례 0.03이면
+      # 저감쇠 접지 떨림. 라운드 2 검증 지적)
+      ankle_kd_ratio: 0.2
+
+# 학습 실행 규모 (tools/02_controller.py train)
+train:
+  # 난수 시드 (로봇 선택·명령·리셋 노이즈·네트워크 초기화)
+  seed: 42
+  # 곡선 기록·체크포인트 주기 (iteration)
+  chunk_iters: 50
+  # pilot = 보행 창발 사다리의 현재 단계 (변수 1개씩 추가 — 실패 원인이
+  # 그 단계의 추가 변수로 귀속되게).
+  # 단계 0 (현재): 표준형 로봇 1대 x 평지 — 파이프라인 보행 존재 증명.
+  # 단계 1: terrain_mode rough / 단계 2: 로봇 2종 / 단계 3: 본 규모
+  pilot:
+    num_robots: 1
+    # 지정 시 이름 필터. go2_proxy = 실 go2의 관성·조인트 그대로 + 블록
+    # 형상 (파이프라인 교차 검증: 걸으면 생성 로봇 물리 문제, 안 걸으면
+    # 파이프라인 잔여 결함)
+    robot_names: [go2_proxy]
+    # 사다리 단계별 지형 (기본 env.terrain을 덮음)
+    terrain_mode: flat
+    envs_per_robot: 1024
+    # 2000 iter x 1024 env x 24스텝 ≈ 49M 표본 — 표준 레시피(약 100M)의
+    # 절반. 600(14.7M)은 1/7이라 확률 정책조차 약보행 + std 감쇠 미완
+    # (0.80 -> 0.76)이었던 것 실측
+    iterations: 2000
+    terrain:
+      num_rows: 4
+      num_cols: 4
+  # full = 본 학습 (정적 검사 통과 셋에서 시드 선택).
+  # 지형 격자는 RL 원본(velocity rough) 규모
+  full:
+    num_robots: 24
+    envs_per_robot: 128
+    iterations: 3000
+    terrain:
+      num_rows: 10
+      num_cols: 20

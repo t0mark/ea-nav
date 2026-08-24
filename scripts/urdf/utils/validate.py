@@ -77,6 +77,7 @@ def validate_static(urdf_path, standing_pose: dict, contact_links: list[str], cf
     checks["self_collision"] = _check_self_collision(model, metrics)
     checks["coplanar_contact"] = _check_coplanar(model, contact_links, z0, cfg, metrics)
     checks["gravity_torque"] = _check_torque(model, cfg, metrics)
+    checks["stance_torque"] = _check_stance_torque(model, contact_links, total_mass, cfg, metrics)
     _measure_bbox(model, z0, metrics)
 
     # 무게중심-지지 다각형: balancing은 지지가 선분이라 특수 검사로 대체
@@ -247,6 +248,64 @@ def _check_torque(model, cfg, metrics) -> bool:
             ok = False
     metrics["torque_margin_min"] = None if worst == float("inf") else worst
     metrics["torque_worst_joint"] = worst_joint
+    return ok
+
+
+def _check_stance_torque(model, contact_links, total_mass, cfg, metrics) -> bool:
+    """스탠스 토크 검사 (legged 전용): 지지 국면 GRF 모멘트 x 여유율 <= 토크 한계.
+
+    보행 지지 국면에는 접촉 링크의 절반이 전 체중을 나눠 진다 (quad 트롯 대각 2 /
+    hex 트라이포드 3 / humanoid 단일 지지): F = m g / (다리 수 / 2).
+    각 다리 체인(base_link -> 접촉 링크)의 revolute 관절 j에 대해
+    tau_j = |axis_w . ((p_c - p_j) x F z_hat)|, p_c = 접지면 압력 중심
+    (최저점 밴드 정점 평균 — 꼭짓점 1개를 쓰면 발 박스 모서리의 과대 팔이 잡힘).
+    스윙 자중 검사(_check_torque)가 못 보는 지지 하중의 독립 검사이며, 보폭
+    자세의 추가 모멘트 팔은 생성기 하한(gait.arm_min_frac)이 담당한다.
+    다리 판정 = continuous 없이 revolute로만 base와 연결된 접촉 링크
+    (바퀴 continuous·캐스터 fixed 접촉은 자동 제외 -> wheeled는 항상 통과).
+    """
+    # 접촉 링크별 관절 체인 수집 (다리가 아닌 접촉 링크는 제외)
+    parent_joint = {j.child: j for j in model.joints}
+    legs = []
+    for name in contact_links:
+        chain, node, is_leg = [], name, False
+        while node in parent_joint:
+            j = parent_joint[node]
+            if j.type == "continuous":
+                is_leg = False
+                break
+            if j.type == "revolute":
+                chain.append(j)
+                is_leg = True
+            node = j.parent
+        if is_leg and chain:
+            legs.append((name, chain))
+    if not legs:
+        return True
+
+    # 지지 다리 수 = 절반 (내림, 최소 1 — humanoid 2발 -> 단일 지지)
+    force = total_mass * 9.81 / max(len(legs) // 2, 1)
+    f_vec = np.array([0.0, 0.0, force])
+    worst, worst_joint, ok = float("inf"), "", True
+    for name, chain in legs:
+        # 압력 중심 = 접촉 링크 최저점 밴드의 정점 평균 (평발 CoP 근사)
+        verts = np.vstack([m.vertices for l in model.links if l.name == name for m in l.meshes])
+        band = verts[verts[:, 2] < verts[:, 2].min() + cfg["contact_band"]]
+        p_c = band.mean(axis=0)
+        for j in chain:
+            # 관절 원점·축을 월드 좌표로 (URDF axis는 자식 프레임 기준)
+            T = model.link_transform(j.child)
+            p = T[:3, 3]
+            axis = T[:3, :3] @ np.asarray(j.axis if j.axis is not None else [0, 0, 1], dtype=float)
+            tau = abs(float(np.cross(p_c - p, f_vec) @ axis))
+            limit = j.limit.effort if j.limit is not None and j.limit.effort else 0.0
+            ratio = limit / max(tau, 1e-9)
+            if ratio < worst:
+                worst, worst_joint = ratio, j.name
+            if tau * cfg["stance_torque_margin"] > limit:
+                ok = False
+    metrics["stance_margin_min"] = None if worst == float("inf") else worst
+    metrics["stance_worst_joint"] = worst_joint
     return ok
 
 
