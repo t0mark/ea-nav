@@ -1,139 +1,75 @@
-# controller 단계 설정 (wheeled: pure pursuit 명령 계층 + IK/LQR 배분 + 주행 시나리오)
-# 원칙: plan/urdf.md — 임계값·게인 상수는 config로 관리
-
-# 제어 공통 (scripts/sim/controller/wheeled/controller.py)
 ctrl:
-  # 제어 주기 = 물리 스텝 x decimation (200Hz -> 50Hz).
-  # balancing은 LQR을 매 물리 스텝 돌리고 명령 갱신만 이 주기를 쓴다
   decimation: 4
-  # 명령 경계 여유율 (바퀴 속도 한계 대비 — 초과분은 feasible_scale이 재차 클램프)
   limit_margin: 0.9
-  # yaw 명령 절대 상한 (rad/s) — 트랙이 좁은 개체는 바퀴 한계 유도값이
-  # 수십 rad/s가 되어 기하 모델과 실물(관성)이 괴리되므로 캡을 둔다
   yaw_rate_cap: 3.0
-  # skid 옆미끄럼 보상 (유효 트랙 배율) — 고정축 다륜의 선회 저항 보정
-  # (1.6은 최협 트랙 개체에서 부족 실측 -> 2.2)
   skid_yaw_scale: 2.2
-  # skid 적응형 미끄럼 보상: 정적 배율로 남는 개체별 잔여 미끄럼을 명령
-  # 대비 실측 yaw 비율로 온라인 흡수. 지형 롤아웃(3단계)은 장애물 걸림을
-  # 미끄럼으로 오인하므로 enabled: false로 쓸 것
-  slip_adapt_enabled: true
-  # 제어 스텝당 적분 게인 / 배율 하한·상한 (하한 < 1 = 과보상 하향 적응) /
-  # 갱신 유효 최소 yaw 명령 (rad/s)
-  slip_adapt_rate: 0.02
-  slip_gain_min: 0.5
-  slip_gain_max: 3.0
-  slip_valid_w: 0.3
-  # mecanum의 적응 보상 허용 전도 한계 하한 (m/s^2) — 롤러 요동 증폭이
-  # 안전한 저상 개체만 보상 (상체 무거운 개체는 증폭 지터로 전도 실측.
-  # 파일럿 분포: 전도 개체 2.9 / 정상 7.3·28.4)
-  mecanum_adapt_min_tip: 5.0
-  # 명령 슬루 제한 (제어 주기당 변화량 = 가속도 x 주기) — 급가감속 저크로
-  # 상체 무거운 개체가 전도하는 것 실측 보정
   lin_accel: 1.5
   yaw_accel: 4.0
-  # 전도 한계 가속도(기하 유도) 대비 안전율 — 가감속·원심·곡률 감속에 적용
-  tip_safety: 0.5
-  # diff 최소 선회 반경 = 배수 x 트랙 폭 — 협트랙 2륜+캐스터의 안쪽 바퀴
-  # 무부하 스틱-슬립 교착 회피 (안쪽/바깥 속도비가 절반 이상 유지되는 반경)
-  diff_turn_radius_tracks: 1.5
-
-# pure pursuit 명령 계층 (scripts/sim/controller/core/high_pp.py — wheeled·legged 공용)
+  pid_kp: 0.5
+  pid_ki: 0.3
+  pid_kd: 0.0
+  pid_i_limit: 1.0
 pp:
-  # 전방 주시 거리 = max(하한, 직전 속도 x 시간) (m, s).
-  # 하한은 회전 반경 비례로 추가 상향 (배율 — 대회전 개체에서 주시 거리
-  # << 회전 반경이면 곡률 요구가 항상 포화해 진동 위험. L_d ~ R 관행)
   lookahead_min: 0.5
   lookahead_time: 0.6
   lookahead_turn_ratio: 0.5
-  # 목표 변경 감지 문턱 (m — 기준선 재설정 판정)
   goal_change_eps: 0.05
-  # 정지 프로파일: 계획 감속 = margin x 가속 한계 (슬루와 정합 여유),
-  # 목표 앞 정지점 오프셋 (m — 도달 반경 안 체류가 성립하는 근거)
   decel_margin: 0.7
   stop_dist: 0.12
-  # 곡률 감속 횡가속 한계 (m/s^2 — 전도 한계가 더 작으면 그 값 사용)
   lat_accel: 2.0
-  # 선회 우선 모드: 방위 오차 임계 (rad), 저속 전진 비율 (unicycle 공통 —
-  # 정지 제자리 회전이 마찰에 잠기는 개체(skid·협트랙 diff) 회피), yaw 비율
   pivot_bearing: 1.0
   creep_ratio: 0.15
   turn_w_ratio: 0.7
-  # ackermann 후진 재정렬: 속도 비율 + 래치 방위각 문턱 (rad — 진입 =
-  # 목표가 충분히 뒤, 이탈 = 충분히 앞. 옆 목표는 중간 대역이라 채터 없음)
   reverse_ratio: 0.4
   reverse_enter_bearing: 1.8
   reverse_exit_bearing: 0.6
-  # holonomic 진행 방향 정렬 P 게인 (rad/s per rad)
   yaw_kp: 2.0
-
-# balancing LQR (scripts/sim/controller/wheeled/low_lqr.py)
-lqr:
-  # 상태 가중 [pitch, pitch율, 전진 속도] — pitch 우선 (균형 > 속도 추종)
-  q_diag: [30.0, 3.0, 2.0]
-  # 입력(토크 합) 가중
-  r_effort: 0.5
-  # yaw 차동 토크 P 게인 = 비율 x 바퀴 토크 한계 평균 (질량 1-265kg 분포에
-  # 절대 상수는 규모 부정합 — 토크 한계에 비례시켜 로봇 크기와 스케일)
-  yaw_kp_ratio: 0.025
-  # balancing 명령 경계 비율 (균형 여유 — 일반 타입 limit_margin보다 보수적)
-  cmd_ratio: 0.5
-  # 플래너 감속 가정 비율 (x lin_accel) — 역진자는 뒤로 젖혀야 감속하는
-  # 비최소위상 + LQR 균형 우선이라 유효 감속이 일반의 절반 이하 (플롯
-  # 역산 0.4-0.6 m/s^2). 가정이 크면 과속 진입 -> 관통 루프백 실측
-  brake_ratio: 0.25
-
-# 주행 시나리오 (tools/02_controller.py — pilot·full 공용)
+mppi:
+  # plan_dt: MPPI 롤아웃 한 스텝의 시간 — 제어 주기(ctrl.decimation x physics_dt, 보통
+  # 0.01-0.03s)와 다르다. horizon x plan_dt가 lookahead 지점이 로봇에서 충분히
+  # 멀어질 수 있는 실제 내다보는 시간(초)을 결정한다 (planner.py 클래스 docstring 참고).
+  plan_dt: 0.15
+  horizon: 12
+  # replan_decimation: 제어 스텝 몇 번마다 재계획할지 — MPPI는 이 주기로만 돌고,
+  # 그 사이는 pursuit(PP)가 고주기로 조준점을 추종해 채운다
+  replan_decimation: 10
+  # 재계획 간 조준점이 흔들리면(특히 yaw 방향) pursuit+PID 루프가 공진해 실제 로봇이
+  # 흔들리는 게 slope 파일럿 실측(diff_0000)으로 확인됨 — num_samples를 늘리고 noise를
+  # 줄이고 lambda_(softmax 온도)를 키워 매 재계획의 추정을 더 평균화·안정화한다
+  num_samples: 384
+  noise_ratio: 0.3
+  lambda_: 0.5
+  lookahead_steps: 5
+  goal_weight: 1.0
+  slope_weight: 8.0
+  slope_cap: 0.6
+  smooth_weight: 0.3
+  scan:
+    resolution: 0.25
+    size: [6.0, 6.0]
+    offset_z: 2.0
+governor:
+  margin: 0.85
 scenario:
-  # 웨이포인트 (스폰 기준 상대 m, 스폰 yaw = +x 전진):
-  # 직진 -> 좌회전 -> 우회전 (좌우 대칭 부호 오류가 그물에 걸리게)
   waypoints: [[2.5, 0.0], [2.5, 2.5], [5.0, 2.5]]
-  # balancing 전용: 직립 유지 후 직진 -> 좌회전 (yaw 차동 선회 검증 포함)
-  balancing_waypoints: [[2.0, 0.0], [2.0, 1.5]]
-  # balancing 직립 유지 구간 (s) — 이 동안 목표 = 제자리
-  balance_hold_time: 3.0
-  # 도달 판정 = 반경 안 체류 시간 + 서행 조건 (m, s, m/s). 체류만으로는
-  # 저속 개체의 무정지 관통을 못 거른다 (0.7m 현 / 0.3s = 2.33m/s 미만
-  # 통과 — 감사 수치 반증) -> 속도 상한이 실질적 정지를 판정
   reach_radius: 0.35
-  reach_dwell_time: 0.3
-  # (0.3은 balancing의 정지 유지 진동(LQR 보정 속도)이 걸려 도달 미확정
-  # 실측 -> 0.5. 관통 분리 목적에는 충분 — 순항 속도가 이보다 훨씬 높다)
-  reach_speed_max: 0.5
-  # 제한 시간 = margin x (경로/유효 속도 + 웨이포인트당 선회 1바퀴)를
-  # [min, max]로 클램프 — 완주 능력과 무관한 시계 불공정을 없앤다.
-  # 속도·반경은 제어기 실경계(nav_limits) 기준, 유효 속도 = 경계 x 비율
+  base_contact_thresh: 1.0
+  fall_tilt_deg: 60.0
   timeout_margin: 2.0
   timeout_min: 40.0
   timeout_max: 150.0
   timeout_v_ratio: 0.7
-  # 전도 판정 기울기 (deg)
-  fall_tilt_deg: 60.0
-  # 스폰 직후 정착 시간 (s, balancing 제외 — balancing은 즉시 제어 시작)
   settle_time: 0.5
-  # 궤적 기록 간격 (s, 플롯·경로 길이 계산용)
   traj_interval: 0.1
-  # pilot 시각 확인 씬 목록 (카테고리별). flat = 평지 + 격자, slope/stairs =
-  # 단일 셀 역피라미드 지형 (중앙 스폰 -> 바깥으로 등판. 이전에 만든
-  # add_terrain 재사용 — 해당 서브지형 비율만 1로 두는 오버레이).
-  # full(동적 검사)은 plan 정의대로 평지만 쓴다
   scenes:
     wheeled: [flat, slope]
     legged: [flat, slope, stairs]
-  # 시각 확인용 단일 셀 지형 (sim.yaml terrain 기반 오버레이):
-  # 셀 크기 (웨이포인트 (5, 2.5)가 셀 안에 들어야 함), 경사각 (rad),
-  # 계단 높이 (m — 난이도 고정: 범위 최소=최대)
   eval_terrain:
     size: [14.0, 14.0]
     slope_angle: 0.2
     stair_height: 0.12
-  # 주행 비디오 (pilot 전용 — VSCode 재생 가능한 H.264 mp4)
   video:
-    # 프레임 캡처 간격 (s — 인코딩 fps = 역수, 재생 = 실시간)
     capture_interval_s: 0.15
-    # 연속 캡처의 렌더 워밍업 프레임 (첫 프레임만 전체 워밍업)
     warmup_frames: 2
-    # 궤적 연속선 세그먼트 간격 (s — 이전 위치와 잇는 선분 주기)
     path_interval_s: 0.4
-  # 웨이포인트 마커 색 (순서대로 순환 — 진행 순서 판독용)
   marker_colors: [[0.15, 0.8, 0.25], [0.95, 0.8, 0.1], [0.9, 0.25, 0.2]]

@@ -1,35 +1,65 @@
-"""진입점 공통 유틸 (tools/*.py 단계 스크립트들이 공유).
-
-모든 경로는 이 파일 위치 기준 상대(저장소 루트)로 계산하므로
-실행 위치(cwd)와 무관하게 동작한다. 대용량 산출물 루트는 컨테이너
-마운트 규약(/data)을 따른다.
-"""
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
 import yaml
 
-# 저장소 루트 = tools/utils/common.py 기준 두 단계 위
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 
-# 대용량 산출물 루트 (컨테이너 마운트: ~/jairlab/data -> /data)
 DATA_ROOT = Path("/data/EA-Trav")
 
-
 def load_config(name: str) -> dict:
-    """configs/{name}.yaml 을 읽어 dict로 반환한다."""
+
     with open(WORKSPACE_ROOT / "configs" / f"{name}.yaml") as f:
         return yaml.safe_load(f)
 
-
 def init_logging():
-    """진입점 공통 로깅 설정 (실행 중 진행 로그 출력용)."""
+
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-
 def check_dir(stage: str) -> Path:
-    """단계별 파일럿 산출물 디렉토리 (check/{stage})."""
+
     return WORKSPACE_ROOT / "check" / stage
+
+PILOT_ROBOTS = check_dir("00_urdf") / "robots"
+PILOT_USD = check_dir("01_sim") / "usd"
+FULL_ROBOTS = DATA_ROOT / "urdf/synthesis"
+FULL_USD = DATA_ROOT / "sim/usd"
+
+def mode_roots(mode: str) -> tuple[Path, Path]:
+
+    return (PILOT_ROBOTS, PILOT_USD) if mode == "pilot" else (FULL_ROBOTS, FULL_USD)
+
+def resolve_robot_dirs(root: Path, robot_arg: str | None,
+                       form_filter: tuple[str, ...] | None = None) -> list[Path]:
+
+    from scripts.sim.utils.robot_spawn import iter_robot_dirs
+
+    dirs = iter_robot_dirs(root)
+    if form_filter is not None:
+        dirs = [d for d in dirs if d.parent.name in form_filter]
+    if robot_arg:
+        dirs = [d for d in dirs if str(d.relative_to(root)) == robot_arg]
+    return dirs
+
+def save_report_json(report: dict, path: Path, single_test: bool) -> Path | None:
+
+    if single_test:
+        return None
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(report, f, indent=1, ensure_ascii=False)
+    return path
+
+def save_figure(fig, path: Path) -> None:
+
+    import matplotlib.pyplot as plt
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=110, bbox_inches="tight")
+    plt.close(fig)
