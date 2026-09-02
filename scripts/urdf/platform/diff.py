@@ -19,8 +19,8 @@ class DiffGenerator(WheeledBase):
         caster_kind = str(rng.choice(self._cfg[self.FAMILY]["caster_kinds"]))
 
         dims = self._sample_body_dims(rng)
-        radius = min(self._u(rng, "wheel_radius"), 0.5 * dims["length"])
-        radius = max(radius, 0.015)
+        radius = min(max(self._u(rng, "wheel_radius"), self._min_drive_radius(dims), 0.015),
+                     0.5 * dims["length"])
         wheel_w = radius * self._u(rng, "wheel_width_factor")
 
         if caster_kind == "swivel":
@@ -45,9 +45,7 @@ class DiffGenerator(WheeledBase):
         caster_xs = self._add_casters(spec, rng, geo, caster_kind, axle_x, radius)
         self._setup_com_load(spec, rng, geo, axle_x, caster_xs)
 
-        com_x = spec.links[0].com_xyz[0]
-        fore_aft = min([abs(axle_x - com_x)] + [abs(cx - com_x) for cx in caster_xs])
-        spec.params["wheelbase"] = 2.0 * fore_aft
+        spec.params["wheelbase"] = max(abs(cx - axle_x) for cx in caster_xs)
 
         self._set_drive_limits(spec, rng, radius)
         self._clamp_mass_ratio(spec)
@@ -58,6 +56,7 @@ class DiffGenerator(WheeledBase):
             "has_wheels": True, "has_legs": False,
             "est_step_height": radius * 0.35,
         })
+        self._mark_wheeled_static_checks(spec, "diff")
         return spec
 
     def _add_casters(self, spec, rng, geo, kind, axle_x, radius) -> list[float]:

@@ -19,8 +19,8 @@ class SkidGenerator(WheeledBase):
         wheelbase = dims["length"] * self._u(rng, "wheelbase_factor")
 
         gap_cap = 0.19 if n_axle == 3 else 0.45
-        radius = min(self._u(rng, "wheel_radius"), 0.5 * dims["length"], gap_cap * wheelbase)
-        radius = max(radius, 0.015)
+        radius = min(max(self._u(rng, "wheel_radius"), self._min_drive_radius(dims), 0.015),
+                     0.5 * dims["length"], gap_cap * wheelbase)
         wheel_w = radius * self._u(rng, "wheel_width_factor")
 
         clearance = max(radius * rng.uniform(0.3, 1.2), 0.02)
@@ -29,9 +29,10 @@ class SkidGenerator(WheeledBase):
 
         exposed = bool(rng.random() < 0.5)
         track_half = self._track_half(rng, geo, wheel_w, exposed)
-        ratio_max = self._cfg[self.FAMILY]["wb_track_ratio_max"]
-        wheelbase = min(wheelbase, ratio_max * 2 * track_half)
-        radius = min(radius, gap_cap * wheelbase)
+        rules = self._cfg.get("validation", {}).get("wheeled", {})
+        ratio_max = float(rules.get("skid_wheelbase_track_max",
+                                    self._cfg[self.FAMILY]["wb_track_ratio_max"]))
+        track_half = max(track_half, wheelbase / (2.0 * ratio_max))
 
         xs = [wheelbase / 2, -wheelbase / 2]
         if n_axle == 3:
@@ -57,4 +58,5 @@ class SkidGenerator(WheeledBase):
             "has_wheels": True, "has_legs": False,
             "est_step_height": radius * 0.6,
         })
+        self._mark_wheeled_static_checks(spec, "skid")
         return spec

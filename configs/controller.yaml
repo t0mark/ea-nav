@@ -2,21 +2,43 @@ ctrl:
   decimation: 4
   limit_margin: 0.9
   yaw_rate_cap: 3.0
-  skid_yaw_scale: 2.2
+  # wheel_yaw_scale: wheel matrix yaw 열에 걸리는 실효 선회반경 보정 배율.
+  # 옆미끄럼 없이 도는 타입은 1.0, 고정축 다륜(skid)만 1보다 큰 값을 쓴다.
+  wheel_yaw_scale: 1.0
   lin_accel: 1.5
   yaw_accel: 4.0
-  pid_kp: 0.5
-  pid_ki: 0.3
-  pid_kd: 0.0
-  pid_i_limit: 1.0
+  diff:
+    yaw_rate_cap: 3.0
+    lin_accel: 1.5
+    yaw_accel: 4.0
+  skid:
+    yaw_rate_cap: 2.2
+    wheel_yaw_scale: 2.2
+    lin_accel: 1.2
+    yaw_accel: 3.0
+  ackermann:
+    yaw_rate_cap: 1.6
+    lin_accel: 1.0
+    yaw_accel: 2.0
+  omni:
+    yaw_rate_cap: 2.8
+    lin_accel: 1.2
+    yaw_accel: 3.5
 pp:
+  # lookahead: Nav2 Regulated Pure Pursuit 규약. carrot 거리 L_d = clamp(lookahead_time * v,
+  # lookahead_min, lookahead_max)이고, lookahead_min은 로봇 선회반경(lookahead_turn_ratio 배)
+  # 아래로는 내려가지 않는다. RL은 이 대역에 lookahead_scale 배율 하나만 건다.
   lookahead_min: 0.5
-  lookahead_time: 0.6
+  lookahead_max: 2.0
   lookahead_turn_ratio: 0.5
-  goal_change_eps: 0.05
+  lookahead_time: 1.0
+  # 곡률 regulation: 선회반경이 (regulated_radius_ratio x 명목 선회반경)보다 작으면
+  # 그 비율만큼 속도를 줄이고, regulated_min_speed_ratio 아래로는 내리지 않는다.
+  regulated_radius_ratio: 2.5
+  regulated_min_speed_ratio: 0.3
   decel_margin: 0.7
+  # stop_dist: waypoint 정지 판정 거리.
   stop_dist: 0.12
-  lat_accel: 2.0
   pivot_bearing: 1.0
   creep_ratio: 0.15
   turn_w_ratio: 0.7
@@ -24,32 +46,33 @@ pp:
   reverse_enter_bearing: 1.8
   reverse_exit_bearing: 0.6
   yaw_kp: 2.0
-mppi:
-  # plan_dt: MPPI 롤아웃 한 스텝의 시간 — 제어 주기(ctrl.decimation x physics_dt, 보통
-  # 0.01-0.03s)와 다르다. horizon x plan_dt가 lookahead 지점이 로봇에서 충분히
-  # 멀어질 수 있는 실제 내다보는 시간(초)을 결정한다 (planner.py 클래스 docstring 참고).
-  plan_dt: 0.15
-  horizon: 12
-  # replan_decimation: 제어 스텝 몇 번마다 재계획할지 — MPPI는 이 주기로만 돌고,
-  # 그 사이는 pursuit(PP)가 고주기로 조준점을 추종해 채운다
-  replan_decimation: 10
-  # 재계획 간 조준점이 흔들리면(특히 yaw 방향) pursuit+PID 루프가 공진해 실제 로봇이
-  # 흔들리는 게 slope 파일럿 실측(diff_0000)으로 확인됨 — num_samples를 늘리고 noise를
-  # 줄이고 lambda_(softmax 온도)를 키워 매 재계획의 추정을 더 평균화·안정화한다
-  num_samples: 384
-  noise_ratio: 0.3
-  lambda_: 0.5
-  lookahead_steps: 5
-  goal_weight: 1.0
-  slope_weight: 8.0
-  slope_cap: 0.6
-  smooth_weight: 0.3
-  scan:
-    resolution: 0.25
-    size: [6.0, 6.0]
-    offset_z: 2.0
-governor:
-  margin: 0.85
+  diff:
+    pivot_bearing: 1.0
+    creep_ratio: 0.15
+    yaw_kp: 2.0
+  skid:
+    lookahead_max: 1.8
+    regulated_radius_ratio: 3.0
+    regulated_min_speed_ratio: 0.25
+    pivot_bearing: 0.9
+    creep_ratio: 0.20
+    yaw_kp: 1.6
+  ackermann:
+    lookahead_max: 3.0
+    regulated_radius_ratio: 2.0
+    lookahead_time: 1.2
+    lookahead_turn_ratio: 0.8
+    reverse_ratio: 0.35
+    reverse_enter_bearing: 1.9
+    reverse_exit_bearing: 0.5
+  omni:
+    lookahead_min: 0.4
+    yaw_kp: 1.5
+# policy_path가 채워지면 배포 경로에서 controller parameter 정책을 쓴다.
+# controller별 parameter schema와 이름별 범위, 관측 구성은 학습 설정(wheeled_rl.yaml)에서
+# 정해져 정책 번들(bundle.json)에 실려 오고, 로드 시 현재 controller 코드와 대조된다.
+wheeled_rl:
+  policy_path: null
 scenario:
   waypoints: [[2.5, 0.0], [2.5, 2.5], [5.0, 2.5]]
   reach_radius: 0.35

@@ -329,6 +329,7 @@ class SimEnvironment:
                            gain_overrides_list: list[dict | None] | None = None,
                            origins: torch.Tensor | None = None,
                            activate_contact_sensors: bool = False,
+                           contact_cfg: dict | None = None,
                            friction_links_list: list[list[str] | None] | None = None,
                            friction_links_mu: float = 1.0,
                            solver_iters: tuple[int, int] | None = None,
@@ -374,6 +375,9 @@ class SimEnvironment:
                 activate_contact_sensors=activate_contact_sensors,
                 articulation_props=sim_utils.ArticulationRootPropertiesCfg(**art_props))
             spawn_cfg.func(f"{src}/Robot_g{g:03d}", spawn_cfg)
+
+            if contact_cfg is not None:
+                self._bind_passive_friction(f"{src}/Robot_g{g:03d}", contact_cfg)
 
             if friction_links_list is not None and friction_links_list[g]:
                 self.bind_link_friction(f"{src}/Robot_g{g:03d}",
@@ -531,11 +535,17 @@ class SimEnvironment:
         art.update(self._dt)
 
     def step_multi(self, joint_pos_targets: list[torch.Tensor] | None = None,
+                   joint_vel_targets: list[torch.Tensor] | None = None,
+                   joint_effort_targets: list[torch.Tensor] | None = None,
                    render: bool = False):
 
         for g, art in enumerate(self._groups):
-            if joint_pos_targets is not None:
+            if joint_pos_targets is not None and joint_pos_targets[g] is not None:
                 art.set_joint_position_target(joint_pos_targets[g])
+            if joint_vel_targets is not None and joint_vel_targets[g] is not None:
+                art.set_joint_velocity_target(joint_vel_targets[g])
+            if joint_effort_targets is not None and joint_effort_targets[g] is not None:
+                art.set_joint_effort_target(joint_effort_targets[g])
             art.write_data_to_sim()
         self._sim.step(render)
         for art in self._groups:

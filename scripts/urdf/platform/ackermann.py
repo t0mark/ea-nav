@@ -18,8 +18,8 @@ class AckermannGenerator(WheeledBase):
 
         dims = self._sample_body_dims(rng)
         wheelbase = dims["length"] * self._u(rng, "wheelbase_factor")
-        radius = min(self._u(rng, "wheel_radius"), 0.5 * dims["length"], 0.45 * wheelbase)
-        radius = max(radius, 0.015)
+        radius = min(max(self._u(rng, "wheel_radius"), self._min_drive_radius(dims), 0.015),
+                     0.5 * dims["length"], 0.45 * wheelbase)
         wheel_w = radius * self._u(rng, "wheel_width_factor")
         clearance = max(radius * rng.uniform(0.3, 1.2), 0.02)
         geo = self._build_base(spec, rng, dims, clearance)
@@ -84,6 +84,7 @@ class AckermannGenerator(WheeledBase):
             "has_wheels": True, "has_legs": False,
             "est_step_height": radius * 0.35,
         })
+        self._mark_wheeled_static_checks(spec, "ackermann")
         return spec
 
     def _setup_com_load(self, spec, rng, geo, wheelbase, drive_mode) -> float:

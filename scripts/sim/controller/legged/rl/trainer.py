@@ -10,8 +10,8 @@ import torch
 
 from rsl_rl.runners import OnPolicyRunner
 
-from scripts.sim.controller.legged import low_rl
-from scripts.sim.controller.legged.train.train_env import LeggedTrainEnv
+from scripts.sim.controller.legged.rl import bundle as low_rl
+from scripts.sim.controller.legged.rl.train_env import LeggedTrainEnv
 
 logger = logging.getLogger(__name__)
 

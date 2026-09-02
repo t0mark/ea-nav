@@ -11,14 +11,26 @@ class WheeledBase(BaseGenerator):
 
     def _sample_body_dims(self, rng: np.random.Generator) -> dict:
 
+        """wheeled base의 몸통 치수를 안정성 비율 안에서 샘플링한다."""
+
         shape = str(rng.choice(self._cfg[self.FAMILY]["body_shapes"]))
         length = self._u(rng, "body_length")
         width = min(self._u(rng, "body_width"), length * 1.2)
         height = self._u(rng, "body_height")
+        rules = self._cfg.get("validation", {}).get("wheeled", {})
+        width = max(width, length * float(rules.get("body_width_length_min", 0.0)))
+        height = min(height, width * float(rules.get("body_height_width_max", float("inf"))))
 
         if shape.startswith("cylinder"):
             length = width
         return {"shape": shape, "length": length, "width": width, "height": height}
+
+    def _min_drive_radius(self, dims: dict) -> float:
+
+        """몸통 높이에 비해 지나치게 작은 구동 바퀴가 나오지 않게 하한을 계산한다."""
+
+        rules = self._cfg.get("validation", {}).get("wheeled", {})
+        return dims["height"] * float(rules.get("wheel_radius_body_height_min", 0.0))
 
     def _build_base(self, spec: RobotSpec, rng: np.random.Generator,
                     dims: dict, clearance: float) -> dict:
@@ -105,11 +117,15 @@ class WheeledBase(BaseGenerator):
     def _track_half(self, rng: np.random.Generator, geo: dict, wheel_w: float,
                     exposed: bool) -> float:
 
+        rules = self._cfg.get("validation", {}).get("wheeled", {})
+        min_track_half = 0.5 * geo["width"] * float(rules.get("track_body_width_min", 0.0))
         if exposed:
-            return geo["width"] / 2 + rng.uniform(0.005, 0.03) + wheel_w / 2
+            return max(geo["width"] / 2 + rng.uniform(0.005, 0.03) + wheel_w / 2,
+                       min_track_half)
 
         upper = geo["width"] / 2 * 0.95 - wheel_w / 2
-        return max(min(geo["width"] / 2 * rng.uniform(0.5, 0.85), upper), wheel_w * 0.6)
+        return max(min(geo["width"] / 2 * rng.uniform(0.5, 0.85), upper),
+                   wheel_w * 0.6, min_track_half)
 
     def _set_drive_limits(self, spec: RobotSpec, rng: np.random.Generator, radius: float):
 
@@ -121,3 +137,14 @@ class WheeledBase(BaseGenerator):
             j.velocity = v_max / radius
         spec.params["max_lin_vel"] = v_max
         spec.params["wheel_radius"] = radius
+
+    def _mark_wheeled_static_checks(self, spec: RobotSpec, base_type: str | None = None):
+
+        """시뮬레이션 없이 검사할 wheeled 전용 준정적 규칙을 예약한다."""
+
+        spec.special["overturn"] = {}
+        spec.special["slope_static"] = {}
+        spec.special["wheeled_geometry"] = {
+            "base_type": base_type or spec.control_tag.removeprefix("wheeled_humanoid_"),
+            **spec.params,
+        }

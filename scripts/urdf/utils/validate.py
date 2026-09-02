@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +51,12 @@ def validate_static(urdf_path, standing_pose: dict, contact_links: list[str], cf
     _measure_bbox(model, z0, metrics)
 
     checks["com_support"] = _check_com_polygon(model, com, contact_links, z0, cfg, metrics)
+
+    if "slope_static" in special:
+        checks["slope_static"] = _check_slope_static(model, com, contact_links, z0, cfg, metrics)
+
+    if "wheeled_geometry" in special:
+        checks["wheeled_geometry"] = _check_wheeled_geometry(special["wheeled_geometry"], cfg, metrics)
 
     if "load_share" in special:
         checks["load_share"] = _check_load_share(com, special["load_share"], cfg, metrics)
@@ -114,14 +121,7 @@ def _check_coplanar(model, contact_links, z0, cfg, metrics) -> bool:
 
 def _check_com_polygon(model, com, contact_links, z0, cfg, metrics) -> bool:
 
-    pts = []
-    for l in model.links:
-        if l.name not in contact_links:
-            continue
-        for m in l.meshes:
-            v = m.vertices
-            pts.append(v[v[:, 2] < z0 + cfg["contact_band"], :2])
-    pts = np.vstack([p for p in pts if len(p)])
+    pts = _support_points(model, contact_links, z0, cfg)
 
     try:
         hull = ConvexHull(pts)
@@ -132,6 +132,57 @@ def _check_com_polygon(model, com, contact_links, z0, cfg, metrics) -> bool:
     margin = float(-(hull.equations[:, :2] @ com[:2] + hull.equations[:, 2]).max())
     metrics["com_margin"] = margin
     return margin >= cfg["com_margin_min"]
+
+def _support_points(model, contact_links, z0, cfg) -> np.ndarray:
+
+    """접지 링크의 바닥 근처 vertex를 모아 support polygon 후보점을 만든다."""
+
+    pts = []
+    for l in model.links:
+
+        if l.name not in contact_links:
+            continue
+
+        for m in l.meshes:
+
+            v = m.vertices
+            band = v[v[:, 2] < z0 + cfg["contact_band"], :2]
+            if len(band):
+                pts.append(band)
+    if not pts:
+        return np.zeros((0, 2))
+    return np.vstack(pts)
+
+def _support_margin(pts: np.ndarray, point_xy: np.ndarray) -> float:
+
+    """ConvexHull 반공간 식으로 점에서 support polygon 경계까지의 signed margin을 계산한다."""
+
+    hull = ConvexHull(pts)
+    return float(-(hull.equations[:, :2] @ point_xy + hull.equations[:, 2]).max())
+
+def _check_slope_static(model, com, contact_links, z0, cfg, metrics) -> bool:
+
+    """경사면을 중력 방향 변화로 근사해 네 방향 준정적 안정성을 검사한다."""
+
+    pts = _support_points(model, contact_links, z0, cfg)
+    theta = float(cfg.get("slope_static_angle", 0.0))
+    height = float(com[2] - z0)
+    directions = [np.array([1.0, 0.0]), np.array([-1.0, 0.0]),
+                  np.array([0.0, 1.0]), np.array([0.0, -1.0])]
+
+    margins = []
+    try:
+        for direction in directions:
+
+            # 기울어진 중력선과 접지 평면의 교점을 support polygon 안에서 검사한다.
+            projected = com[:2] + height * math.tan(theta) * direction
+            margins.append(_support_margin(pts, projected))
+    except Exception:
+        metrics["slope_margin_min"] = -1.0
+        return False
+
+    metrics["slope_margin_min"] = float(min(margins))
+    return metrics["slope_margin_min"] >= float(cfg.get("slope_margin_min", 0.0))
 
 def _check_torque(model, cfg, metrics) -> bool:
 
@@ -237,13 +288,80 @@ def _check_load_share(com, params, cfg, metrics) -> bool:
     span = params["other_x"] - params["drive_x"]
     share = float((params["other_x"] - com[0]) / span) if abs(span) > 1e-6 else 1.0
     metrics["drive_load_share"] = share
-    return share >= cfg["load_share_min"]
+    return cfg["load_share_min"] <= share <= float(cfg.get("load_share_max", 1.0))
 
 def _check_overturn(com, z0, cfg, metrics) -> bool:
 
     ratio = float((com[2] - z0) / max(metrics["com_margin"], 1e-6))
+    tip_accel = 9.81 / max(ratio, 1e-6)
     metrics["overturn_ratio"] = ratio
-    return ratio <= cfg["overturn_max"]
+    metrics["tip_accel"] = tip_accel
+    return ratio <= cfg["overturn_max"] and tip_accel >= float(cfg.get("tip_accel_min", 0.0))
+
+def _check_wheeled_geometry(params, cfg, metrics) -> bool:
+
+    """wheeled 로봇의 타입별 형상 비율이 제어 가능한 범위에 있는지 검사한다."""
+
+    rules = cfg.get("wheeled", {})
+    base_type = str(params.get("base_type", ""))
+    length = float(params.get("body_length", 0.0))
+    width = float(params.get("body_width", 0.0))
+    height = float(params.get("body_height", 0.0))
+    radius = float(params.get("wheel_radius", 0.0))
+    clearance = float(params.get("ground_clearance", 0.0))
+    wheelbase = float(params.get("wheelbase", 0.0))
+    track_values = [float(params[k]) for k in ("track_width", "track_front", "track_rear")
+                    if k in params and float(params[k]) > 0.0]
+    track = min(track_values) if track_values else 0.0
+
+    checks = {
+        "track_body_width": _ratio(track, width) >= float(rules.get("track_body_width_min", 0.0)),
+        "height_track": _ratio(height, track) <= float(rules.get("body_height_track_max", 1.5)),
+        "wheel_radius_body_height": _ratio(radius, height) >= float(rules.get("wheel_radius_body_height_min", 0.0)),
+        "clearance_wheel_radius": (
+            float(rules.get("clearance_wheel_radius_min", 0.0))
+            <= _ratio(clearance, radius)
+            <= float(rules.get("clearance_wheel_radius_max", float("inf")))),
+    }
+
+    if base_type == "diff":
+        checks["diff_wheelbase_body_length"] = (
+            _ratio(wheelbase, length) >= float(rules.get("diff_wheelbase_body_length_min", 0.0)))
+    elif base_type == "skid":
+        checks["skid_wheelbase_body_length"] = (
+            _ratio(wheelbase, length) >= float(rules.get("skid_wheelbase_body_length_min", 0.0)))
+        checks["skid_wheelbase_track"] = (
+            _ratio(wheelbase, track) <= float(rules.get("skid_wheelbase_track_max", float("inf"))))
+    elif base_type == "ackermann":
+        checks["ackermann_wheelbase_body_length"] = (
+            _ratio(wheelbase, length) >= float(rules.get("ackermann_wheelbase_body_length_min", 0.0)))
+        checks["ackermann_turn_radius_body_length"] = (
+            _ratio(float(params.get("min_turn_radius", 0.0)), length)
+            <= float(rules.get("ackermann_turn_radius_body_length_max", float("inf"))))
+    elif base_type == "omni":
+        if wheelbase > 0.0:
+            checks["omni_wheelbase_body_length"] = (
+                _ratio(wheelbase, length) >= float(rules.get("omni_wheelbase_body_length_min", 0.0)))
+        if "ring_radius" in params:
+            checks["omni_ring_body_width"] = (
+                _ratio(float(params["ring_radius"]), width) >= float(rules.get("omni_ring_body_width_min", 0.0)))
+        checks["omni_roller_count"] = (
+            int(params.get("n_rollers_per_wheel", 0)) >= int(rules.get("omni_roller_count_min", 0)))
+
+    metrics["wheeled_geometry"] = {k: bool(v) for k, v in checks.items()}
+    metrics["track_body_width_ratio"] = _ratio(track, width)
+    metrics["body_height_track_ratio"] = _ratio(height, track)
+    metrics["wheel_radius_body_height_ratio"] = _ratio(radius, height)
+    metrics["clearance_wheel_radius_ratio"] = _ratio(clearance, radius)
+    return all(checks.values())
+
+def _ratio(num: float, den: float) -> float:
+
+    """0 또는 누락된 치수 때문에 비율 검사가 통과하지 않도록 안전 비율을 만든다."""
+
+    if den <= 1e-9:
+        return float("inf")
+    return num / den
 
 def _check_extra_poses(urdf_path, standing_pose, check_poses, contact_links,
                        cfg, special, metrics) -> bool:

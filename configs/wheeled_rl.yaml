@@ -1,0 +1,148 @@
+env:
+  terrain: mixed
+  physics_dt: 0.005
+  decimation: 4
+  episode_len_s: 30.0
+  spacing: 5.0
+  self_collision: true
+  solver_iters: [4, 0]
+  actuator_model: implicit
+  # decision_period_s: 정책이 새 controller parameter를 몇 초마다 다시 고르는가.
+  # Daffan/APPLR·Daffan/ros_jackal(공식 코드)의 JackalGazebo.time_step(기본 1초)과 동일한
+  # 값이다 — 그 코드는 _take_action에서 파라미터를 한 번 설정한 뒤 move_base/DWA가 그
+  # 값으로 time_step초 동안 자기 제어 루프를 그대로 돌리게 두고, RL은 그 주기로만
+  # 재결정한다. 물리/제어 tick(physics_dt x decimation)마다 재샘플링하면 안정성에 직결되는
+  # 게인(yaw_kp, wheel_yaw 등)이 매 tick 요동쳐 로봇이 즉시 넘어진다 — 실측으로 확인됨.
+  decision_period_s: 1.0
+  # controller parameter schema. RL은 controller action(휠 속도·조향각)을 만들지 않고,
+  # 기존 controller가 이미 쓰는 해석 가능한 parameter에 곱할 배율만 고른다. 정책은
+  # decision_period_s마다 실시간 상태(목표 방향/거리, 속도, 기울기, 직전 배율)를 보고 새
+  # 배율을 내고, 그 사이엔 값을 고정한 채 controller가 매 tick 그대로 쓴다.
+  #
+  # 아래 param_schema는 controller type이 실제로 해석하는 이름 목록이고, 정의 자체는
+  # adapter.SCHEMAS(코드)가 갖는다. 여기 적힌 값은 시작할 때 코드와 대조되며 다르면 실패한다.
+  # 정책 action 벡터는 rsl-rl이 고정 차원을 요구하므로 네 schema의 합집합(padded)이고,
+  # 자기 schema에 없는 차원은 adapter가 1.0(= controller 기본 설정) no-op으로 고정한다.
+  param_schema:
+    # 제자리 선회(pivot/creep) 후 bearing P 제어로 yaw를 만들고 carrot 곡률로 감속한다
+    diff: [drive_speed_scale, yaw_speed_scale, lin_accel_scale, yaw_accel_scale, yaw_kp_scale, lookahead_scale, pivot_bearing_scale, creep_ratio_scale]
+    # diff와 같고, 옆미끄럼으로 도는 고정축 다륜의 실효 선회반경 보정이 하나 더 붙는다
+    skid: [drive_speed_scale, yaw_speed_scale, lin_accel_scale, yaw_accel_scale, yaw_kp_scale, lookahead_scale, pivot_bearing_scale, creep_ratio_scale, wheel_yaw_scale]
+    # 조향각이 carrot 곡률에서 바로 나오므로 yaw_kp가 없고, 제자리 선회 대신 후진 전환을 쓴다
+    ackermann: [drive_speed_scale, yaw_speed_scale, lin_accel_scale, yaw_accel_scale, lookahead_scale, reverse_ratio_scale]
+    # 직선 평행이동이라 경로 곡률이 없어 lookahead 계열이 빠지고, 횡방향 속도가 살아 있다
+    omni: [drive_speed_scale, lateral_speed_scale, yaw_speed_scale, lin_accel_scale, yaw_accel_scale, yaw_kp_scale]
+  # parameter별 배율 범위 [min, max]. 이름 단위로 정의하므로 schema와 자동으로 일치한다.
+  # 모든 범위는 1.0(기본 설정)을 포함해야 한다 — 정규화 항이 1.0 기준으로 계산된다.
+  param_bounds:
+    drive_speed_scale: [0.35, 1.25]
+    lateral_speed_scale: [0.35, 1.25]
+    yaw_speed_scale: [0.35, 1.40]
+    lin_accel_scale: [0.50, 1.80]
+    yaw_accel_scale: [0.50, 1.80]
+    yaw_kp_scale: [0.50, 1.80]
+    lookahead_scale: [0.50, 2.00]
+    pivot_bearing_scale: [0.70, 1.40]
+    creep_ratio_scale: [0.20, 2.00]
+    reverse_ratio_scale: [0.40, 1.60]
+    wheel_yaw_scale: [0.60, 1.80]
+  goal_radius: [1.5, 3.0]
+  goal_margin: 0.7
+  reach_radius: 0.35
+  reset_pos_xy_noise: 0.1
+  yaw_noise: 3.14159
+  reset_vel_noise: 0.05
+  max_tilt_deg: 60.0
+  termination_grace_steps: 10
+  contact_force_thresh: 1.0
+  stuck_time_s: 2.0
+  stuck_speed_thresh: 0.03
+  stuck_goal_scale: 2.0
+  curriculum_min_reaches: 2
+  curriculum_walked_ratio: 0.75
+  curriculum_fail_walked_ratio: 0.25
+# obs: 정책이 보는 관측 구성. include_type은 controller type one-hot(4), include_morph는
+# morphology 벡터(10) — 둘 다 로봇 하나에 고정인 정적 블록이다. include_state는 매 tick
+# 바뀌는 실시간 블록(목표 방향/거리·속도·기울기·직전 action, state: 아래 참고)으로, 이게
+# 있어야 정책이 "지금 상황"을 보고 매 tick 다른 배율을 낼 수 있다. 셋 다 끄면 입력이
+# 사라져 오류로 막는다.
+obs:
+  include_type: true
+  include_morph: true
+  include_state: true
+morph:
+  len_scale: 1.0
+  vel_scale: 3.0
+  effort_log_scale: 5.0
+# state: obs의 실시간 블록을 정규화하는 스케일. goal_scale은 body-frame 목표 위치(m),
+# vel_scale은 body 선속도(m/s), ang_scale은 yaw 각속도(rad/s)를 나눈다.
+state:
+  goal_scale: 3.0
+  vel_scale: 2.0
+  ang_scale: 2.0
+rewards:
+  progress: 4.0
+  goal: 8.0
+  upright: 0.5
+  fall: -10.0
+  base_contact: -5.0
+  parameter_regularization: -0.02
+  stall: -0.5
+# td3: Daffan/APPLR·Daffan/ros_jackal의 rl_algos/td3.py 그대로 포팅한 하이퍼파라미터.
+# tau/policy_noise/noise_clip/update_actor_freq/n_step/gamma는 원본 알고리즘 값 그대로다.
+# buffer_decisions/pre_collect_decisions/update_per_step은 "decision(1초) 1번 = env
+# 전체(K*M개) transition 1묶음"으로 우리 쪽 스케일에 맞춰 조정한 값이라 원본 수치(단일 env
+# 기준 buffer_size=200000, pre_collect=4096)와 절대값이 다르다 — 총 transition 수 기준으로
+# 비슷한 자릿수가 되도록 맞췄다.
+td3:
+  hidden_dims: [256, 256]
+  actor_lr: 1.0e-4
+  critic_lr: 2.0e-4
+  gamma: 0.99
+  tau: 0.005
+  policy_noise: 0.2
+  noise_clip: 0.5
+  update_actor_freq: 2
+  n_step: 4
+  exploration_noise_start: 0.3
+  exploration_noise_end: 0.05
+  buffer_decisions: 2000
+  pre_collect_decisions: 50
+  update_per_step: 40
+  batch_size: 256
+train:
+  seed: 42
+  chunk_iters: 25
+  # Daffan/APPLR·ros_jackal은 수렴/실패 조기종료 없이 고정 sample budget(APPLR 논문: TD3로
+  # 5M transition, 약 6시간)만큼만 돈다. 여기도 같은 원칙으로 iterations를 고정 예산으로 쓴다.
+  # num_robots = 정책이 같이 학습하는 morphology 종수(K),
+  # envs_per_robot = 종당 동시에 도는 시뮬 env 수(M, 서로 다른 지형·goal에서 독립 진행).
+  # 전체 env 수는 K*M이고, 각 env는 매 tick 관측·action·reward가 도는 표준 MDP다.
+  # holdout_robots = 학습에서 제외하고 평가에만 쓰는 로봇 수(일반화 검증용).
+  # 파일럿 셋은 wheeled form 5종 x 2대 = 10대뿐이라, form마다 1대씩 학습/holdout으로 가른다
+  pilot:
+    num_robots: 5
+    envs_per_robot: 32
+    holdout_robots: 5
+    iterations: 2000
+    terrain:
+      stairs_proportion: 0.0
+      stairs_inv_proportion: 0.0
+      boxes_proportion: 0.15
+      rough_proportion: 0.25
+      slope_proportion: 0.3
+      slope_inv_proportion: 0.3
+  full:
+    num_robots: 256
+    envs_per_robot: 16
+    holdout_robots: 30
+    iterations: 8000
+    terrain:
+      num_rows: 8
+      num_cols: 8
+      stairs_proportion: 0.0
+      stairs_inv_proportion: 0.0
+      boxes_proportion: 0.15
+      rough_proportion: 0.25
+      slope_proportion: 0.3
+      slope_inv_proportion: 0.3

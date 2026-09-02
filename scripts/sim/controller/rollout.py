@@ -11,8 +11,7 @@ from scripts.sim.controller.core import scan_terrain
 from scripts.sim.controller.core.base import (LEGGED_TAGS, ControlObs,
                                               extract_ctrl_params,
                                               make_controller)
-from scripts.sim.controller.core.scan_terrain import TerrainScan
-from scripts.sim.controller.legged import low_rl
+from scripts.sim.controller.legged.rl import bundle as low_rl
 from scripts.sim.utils import render as render_utils
 from scripts.sim.utils import robot_spawn
 from scripts.sim.utils.environment import SimEnvironment, attach_contact_sensor
@@ -193,10 +192,6 @@ def simulate_scenario(env: SimEnvironment, controller, ctrl_cfg: dict,
                         env.robot.data.root_pos_w[:, 2],
                         scan_ctx["scanner"].data.ray_hits_w[:, :, 2],
                         scan_ctx["base_height"], scan_ctx["clip"])
-                else:
-                    obs.terrain_scan = TerrainScan.from_ray_hits(
-                        scan_ctx["scanner"].data.ray_hits_w, scan_ctx["nx"],
-                        scan_ctx["ny"], scan_ctx["resolution"])
             targets = controller.compute(obs, goal.unsqueeze(0))
             env.step(targets.pos, targets.vel, targets.effort)
         else:
@@ -247,7 +242,11 @@ def simulate_scenario(env: SimEnvironment, controller, ctrl_cfg: dict,
 
         base_force = float(torch.norm(
             base_sensor.data.net_forces_w_history[:, :, 0], dim=-1).max())
-        tilted = bool(obs.gravity_b[0, 2] > -tilt_cos)
+        # 기울기 판정은 제어 관측(obs)이 아니라 매 물리 스텝의 최신 자세를 읽는다. obs는
+        # decimation 주기로만 갱신되므로 그 값을 쓰면 낙상 시각이 최대 decimation 스텝만큼
+        # 늦게 찍힌다 — 제어 입력은 decimation마다 계산해도 되지만, 실패 판정은 시뮬레이션
+        # 상태 기준이어야 "언제 넘어졌는지"가 원인 분석에 쓸 수 있는 값이 된다
+        tilted = bool(env.robot.data.projected_gravity_b[0, 2] > -tilt_cos)
         if base_force > contact_thresh or tilted:
             fell = True
             break
@@ -356,14 +355,6 @@ def evaluate_scene(usd_dir: Path, urdf_path: Path, rel: str, form: str, scene: s
             scan_ctx = {"scanner": scanner,
                         "base_height": float(meta["metrics"]["base_height"]),
                         "clip": float(sc["clip"])}
-        else:
-            # wheeled MPPI 로컬 플래너용 지형 격자 — world 축정렬(로봇 위치만 따라 이동)
-            sc = ctrl_cfg["mppi"]["scan"]
-            prim = f"/World/envs/env_0/Robot/{base_link}"
-            scanner = RayCaster(scan_terrain.scanner_cfg(prim, sc, alignment="world"))
-            nx, ny = scan_terrain.grid_shape(sc)
-            scan_ctx = {"scanner": scanner, "nx": nx, "ny": ny,
-                        "resolution": float(sc["resolution"])}
     env.reset()
 
     controller = make_controller(

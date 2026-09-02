@@ -1,198 +1,258 @@
 from __future__ import annotations
 
-import math
+import logging
+from abc import abstractmethod
+from collections.abc import Mapping
 
+import numpy as np
 import torch
 
-from ..core.base import (BaseController, ControlObs, JointTargets,
-                         RobotCtrlParams)
-from ..core.track_pursuit import PurePursuit
-from . import ik
-from .governor import Governor
-from .pid import PID
-from .planner import LocalPlanner
+from ..core.base import BaseController, ControlObs, JointTargets, RobotCtrlParams
+from ..core.pure_pursuit import PurePursuit
+from .rl import WheeledRlAdapter
 
-def _yaw_rate_limit(A: torch.Tensor, limits: torch.Tensor) -> float:
+logger = logging.getLogger(__name__)
+
+def _merged_section(section: dict, base_tag: str) -> dict:
+    """전역 기본값에 로봇 타입별 override를 얹은 설정 섹션을 만든다."""
+
+    merged = {k: v for k, v in section.items() if not isinstance(v, Mapping)}
+    merged.update(section.get(base_tag, {}))
+    return merged
+
+def controller_cfg_for(cfg: dict, base_tag: str) -> dict:
+    """wheeled controller가 사용할 타입별 유효 설정을 만든다."""
+
+    out = dict(cfg)
+    out["ctrl"] = _merged_section(cfg["ctrl"], base_tag)
+    out["pp"] = _merged_section(cfg["pp"], base_tag)
+    return out
+
+def yaw_rate_limit(A: torch.Tensor, limits: torch.Tensor) -> float:
+    """휠 속도 한계가 허용하는 body yaw-rate 상한을 계산한다."""
 
     arm = torch.abs(A[:, 2])
     return float(torch.min(limits / torch.clamp(arm, min=1e-6)))
 
-class WheeledRobotController(BaseController):
-    """파이프라인: planner(MPPI) -> pursuit(PP) -> governor(CBF) -> ik.
+# --- wheeled 기구학 (legged와 공유되지 않는 wheeled 전용 로직이라 여기 둔다) ---
 
-    각 단계는 별 파일(planner.py/track_pursuit.py/governor.py/ik.py)에 있고, 이 클래스는
-    그 인스턴스를 만들고 compute()에서 순서대로 호출하는 오케스트레이션만 담당한다.
+def build_wheel_matrix(params: RobotCtrlParams, device: str,
+                       yaw_scale: float = 1.0) -> tuple[list[str], torch.Tensor, torch.Tensor]:
+    """body velocity (vx, vy, wz)를 각 구동 wheel angular velocity로 바꾸는 행렬을 만든다."""
+
+    rows, names, limits = [], [], []
+    radius = max(float(params.wheel_radius), 1e-6)
+    for wheel in params.wheels:
+        x, y = float(wheel.pos[0]), float(wheel.pos[1])
+        if wheel.joint in params.mecanum_sign:
+            sign = float(params.mecanum_sign[wheel.joint])
+            rows.append([1.0 / radius, sign / radius,
+                         yaw_scale * (sign * x - y) / radius])
+        else:
+            tangent = np.array([wheel.axis[1], -wheel.axis[0]], dtype=float)
+            tangent /= max(float(np.linalg.norm(tangent)), 1e-9)
+            rows.append([tangent[0] / radius, tangent[1] / radius,
+                         yaw_scale * (tangent[1] * x - tangent[0] * y) / radius])
+        names.append(wheel.joint)
+        limits.append(float(params.wheel_vel_limit[wheel.joint]))
+    return (names,
+            torch.tensor(rows, dtype=torch.float32, device=device),
+            torch.tensor(limits, dtype=torch.float32, device=device))
+
+def wheel_speeds(A: torch.Tensor, cmd: torch.Tensor,
+                 yaw_scale: torch.Tensor | None = None) -> torch.Tensor:
+    """body command batch를 wheel angular velocity batch로 변환한다."""
+
+    if yaw_scale is None:
+        return cmd @ A.T
+    cmd_for_wheels = cmd.clone()
+    cmd_for_wheels[:, 2] = cmd_for_wheels[:, 2] * yaw_scale
+    return cmd_for_wheels @ A.T
+
+def scale_to_limits(speeds: torch.Tensor, limits: torch.Tensor,
+                    cmd: torch.Tensor) -> torch.Tensor:
+    """휠 속도가 한계를 넘으면 body command 전체를 같은 비율로 줄인다.
+
+    세 축을 같은 배율로 줄이므로 경로 곡률은 보존되고 속도만 낮아진다. 조향 관절이 있는
+    타입은 조향각을 반영한 speeds를 넘겨 같은 규칙을 그대로 쓴다.
     """
+
+    worst = torch.amax(torch.abs(speeds) / limits.unsqueeze(0).clamp_min(1e-6), dim=1)
+    scale = torch.clamp(1.0 / torch.clamp(worst, min=1e-9), max=1.0)
+    return cmd * scale.unsqueeze(1)
+
+def feasible_scale(A: torch.Tensor, limits: torch.Tensor,
+                   cmd: torch.Tensor,
+                   yaw_scale: torch.Tensor | None = None) -> torch.Tensor:
+    """고정축 휠만 있는 타입의 body command를 휠 속도 한계 안으로 줄인다."""
+
+    return scale_to_limits(wheel_speeds(A, cmd, yaw_scale), limits, cmd)
+
+def ackermann_steer(delta: torch.Tensor, params: RobotCtrlParams) -> dict[str, torch.Tensor]:
+    """자전거 모델 조향각을 좌우 ackermann steering joint 각도로 변환한다."""
+
+    kappa = torch.tan(delta) / max(float(params.wheelbase), 1e-6)
+    out = {}
+    for name in params.steer_joints:
+        y = float(params.steer_y[name])
+        angle = torch.atan2(float(params.wheelbase) * kappa, 1.0 - y * kappa)
+        out[name] = torch.clamp(angle, -float(params.steer_range),
+                                float(params.steer_range))
+    return out
+
+# --- wheeled controller base ---
+
+class WheeledControllerBase(BaseController):
+    """wheeled controller 공통 골격.
+
+    공개 ROS mobile-base controller와 같은 단순 계층을 쓴다:
+      1. waypoint tracker가 body command를 만든다.
+      2. RL parameter adapter가 이번 tick 관측으로 controller parameter 배율을 갱신한다.
+      3. 속도·가속도 한계를 적용한다.
+      4. 타입별 기구학이 wheel velocity와 steering position으로 변환한다.
+
+    경사로는 별도 회피 비용으로 취급하지 않는다. 같은 body command를 평지와 경사에 주고,
+    실제 주행 실패는 wheel target, wheel feedback, torque, contact trace로 분리해 판단한다.
+
+    하위 클래스는 tracker 운동 모델(MODEL)과 입력 경계·명령 변환 두 메서드만 채운다.
+    """
+
+    # tracker가 사용할 운동 모델 이름 (unicycle / bicycle / holonomic)
+    MODEL = "unicycle"
 
     def __init__(self, params: RobotCtrlParams, joint_names: list[str],
                  default_pose: torch.Tensor, num_envs: int, device: str,
                  cfg: dict, physics_dt: float):
 
         super().__init__(params, joint_names, default_pose, num_envs, device)
+        cfg = controller_cfg_for(cfg, params.base_tag)
         self.decimation = int(cfg["ctrl"]["decimation"])
-
-        self._wheel_names, self._A, self._limits = ik.build_wheel_matrix(
-            params, device, skid_yaw_scale=cfg["ctrl"]["skid_yaw_scale"])
-        self._wheel_idx = self._index_of(self._wheel_names)
-
-        self._front_wheels = []
-        if params.base_tag == "ackermann":
-            for i, wf in enumerate(params.wheels):
-                if wf.pos[0] > 0:
-
-                    side = max(params.steer_y,
-                               key=lambda n: params.steer_y[n] * float(wf.pos[1]))
-                    self._front_wheels.append((i, side))
-
-        margin = float(cfg["ctrl"]["limit_margin"])
-        v_max = params.max_lin_vel * margin
-        w_max = min(_yaw_rate_limit(self._A, self._limits) * margin,
-                    float(cfg["ctrl"]["yaw_rate_cap"]))
-
-        # 전복 안전 여유는 더 이상 여기서 속도 상한을 깎아 사전 예방하지 않는다 — governor가
-        # 매 스텝 실제 자세(gravity_b)를 보고 필요할 때만 개입한다 (평지에서는 전혀 안 깎임)
-        lin_accel = float(cfg["ctrl"]["lin_accel"])
-        lat_accel = float(cfg["pp"]["lat_accel"])
-        self._lat_accel = lat_accel
-
-        if params.base_tag == "ackermann":
-
-            tan_l = math.tan(params.steer_range)
-            y_in = max(abs(y) for y in params.steer_y.values())
-            kappa_max = tan_l / (params.wheelbase + y_in * tan_l)
-            delta_max = math.atan(params.wheelbase * kappa_max)
-            bounds = [[-v_max, v_max], [-delta_max, delta_max]]
-            model = "bicycle"
-
-            r_turn = 1.0 / kappa_max
-        elif params.holonomic:
-
-            bounds = [[-v_max, v_max], [-v_max, v_max], [-w_max, w_max]]
-            model = "holonomic"
-            r_turn = v_max / w_max
-        else:
-            bounds = [[-v_max, v_max], [-w_max, w_max]]
-            model = "unicycle"
-            r_turn = v_max / w_max
-
-        self.nav_limits = {"v_max": v_max, "w_max": w_max, "r_turn": r_turn}
-
-        creep = float(cfg["pp"]["creep_ratio"])
-        bounds_t = torch.tensor(bounds, dtype=torch.float32, device=device)
-
-        pp_cfg = dict(cfg["pp"])
-        pp_cfg["lookahead_min"] = max(
-            float(pp_cfg["lookahead_min"]),
-            float(pp_cfg["lookahead_turn_ratio"]) * r_turn)
-        self._pursuit = PurePursuit(
-            model, bounds_t, pp_cfg, num_envs, device, wheelbase=params.wheelbase,
-            min_turn_radius=r_turn if model == "bicycle" else 0.0,
-            decel=lin_accel, lat_accel=lat_accel, pivot_creep=creep)
-
         self._period = self.decimation * physics_dt
-        # planner의 dt는 제어 주기가 아니라 MPPI 자체 계획 스텝 시간 — planner.py 참고
-        self._planner = LocalPlanner(model, bounds_t, params.wheelbase,
-                                     float(cfg["mppi"]["plan_dt"]), cfg["mppi"],
-                                     num_envs, device)
-        self._replan_decimation = int(cfg["mppi"]["replan_decimation"])
-        self._plan_step = 0
-        self._local_goal = None
-        self._governor = Governor(params, float(cfg["governor"]["margin"]), v_max)
+        # wheel_yaw_scale은 고정축 휠이 옆미끄럼으로 회전하는 타입(skid)의 실효 선회반경
+        # 보정이다. ROS diff-drive의 wheel_separation_multiplier와 같은 성격이라 타입별
+        # 설정으로 두고, 보정이 필요 없는 타입은 1.0을 쓴다.
+        self._wheel_names, self._A, self._limits = build_wheel_matrix(
+            params, device, yaw_scale=float(cfg["ctrl"]["wheel_yaw_scale"]))
+        self._wheel_idx = self._index_of(self._wheel_names)
+        margin = float(cfg["ctrl"]["limit_margin"])
+        self._v_max = float(params.max_lin_vel) * margin
+        self._w_max = min(yaw_rate_limit(self._A, self._limits) * margin,
+                          float(cfg["ctrl"]["yaw_rate_cap"]))
+        bounds, r_turn = self._control_bounds()
+        self._bounds = torch.tensor(bounds, dtype=torch.float32, device=device)
+        self.nav_limits = {"v_max": self._v_max, "w_max": self._w_max,
+                           "r_turn": r_turn}
+        # lookahead 대역은 로봇 크기·선회 능력에 맞춰 여기서 한 번 정한다. RL은 이 대역
+        # 전체에 배율 하나(lookahead_scale)만 걸어 로봇별로 늘리거나 줄인다
+        pp_cfg = dict(cfg["pp"])
+        pp_cfg["lookahead_min"] = max(float(pp_cfg["lookahead_min"]),
+                                      float(pp_cfg["lookahead_turn_ratio"]) * r_turn)
+        pp_cfg["lookahead_max"] = max(float(pp_cfg["lookahead_max"]),
+                                      pp_cfg["lookahead_min"])
+        self._tracker = PurePursuit(
+            self.MODEL, self._bounds, pp_cfg, num_envs, device,
+            wheelbase=params.wheelbase,
+            turn_radius=r_turn,
+            decel=float(cfg["ctrl"]["lin_accel"]),
+            pivot_creep=float(pp_cfg["creep_ratio"]))
+        self._body_du = torch.tensor(
+            [float(cfg["ctrl"]["lin_accel"]) * self._period,
+             float(cfg["ctrl"]["lin_accel"]) * self._period,
+             float(cfg["ctrl"]["yaw_accel"]) * self._period],
+            dtype=torch.float32, device=device)
+        self._last_cmd = torch.zeros(num_envs, 3, device=device)
+        self._rl_adapter = WheeledRlAdapter(params, cfg.get("wheeled_rl", {}),
+                                            num_envs, device, self._period)
+        logger.info("%s wheeled controller: %s, v %.2f m/s, w %.2f rad/s, "
+                    "lookahead %.2f-%.2f m", params.name, self.MODEL,
+                    self._v_max, self._w_max, pp_cfg["lookahead_min"],
+                    pp_cfg["lookahead_max"])
 
-        lin_step = lin_accel * self._period
-        yaw_step = float(cfg["ctrl"]["yaw_accel"]) * self._period
-        if params.base_tag == "ackermann":
+    @property
+    def rl_adapter(self) -> WheeledRlAdapter:
+        """controller parameter를 들고 있는 RL adapter를 반환한다."""
 
-            du = [lin_step, params.steer_vel_limit * self._period]
-        elif params.holonomic:
-            du = [lin_step, lin_step, yaw_step]
-        else:
-            du = [lin_step, yaw_step]
-        self._du = torch.tensor(du, dtype=torch.float32, device=device)
-        self._last_u = torch.zeros(num_envs, len(du), device=device)
-
-        if model == "unicycle":
-            pid_kw = dict(kp=float(cfg["ctrl"]["pid_kp"]),
-                         ki=float(cfg["ctrl"]["pid_ki"]),
-                         kd=float(cfg["ctrl"]["pid_kd"]),
-                         i_limit=float(cfg["ctrl"]["pid_i_limit"]))
-            self._lin_pid = PID(num_envs, device, out_limit=v_max, **pid_kw)
-            self._yaw_pid = PID(num_envs, device, out_limit=w_max, **pid_kw)
-        else:
-            self._lin_pid = None
-            self._yaw_pid = None
+        return self._rl_adapter
 
     def reset(self, env_ids: torch.Tensor | None = None):
+        """tracker, rate limiter, RL adapter 상태를 초기화한다."""
 
-        self._planner.reset(env_ids)
-        self._pursuit.reset(env_ids)
-        if self._lin_pid is not None:
-            self._lin_pid.reset(env_ids)
-            self._yaw_pid.reset(env_ids)
+        self._tracker.reset(env_ids)
+        self._rl_adapter.reset(env_ids)
         if env_ids is None:
-            self._last_u.zero_()
+            self._last_cmd.zero_()
         else:
-            self._last_u[env_ids] = 0.0
-        # 리셋된 env가 일부여도 다음 compute()에서 전체 재계획을 강제한다 — env별로
-        # 정확히 쪼개는 대신 약간의 여분 계산으로 단순함을 유지 (correctness는 유지됨)
-        self._plan_step = 0
-        self._local_goal = None
+            self._last_cmd[env_ids] = 0.0
 
     def compute(self, obs: ControlObs, goal_xy: torch.Tensor) -> JointTargets:
+        """이번 tick 관측으로 RL parameter를 갱신하고 joint target을 계산한다."""
 
-        # 1. planner(MPPI) — replan_decimation 주기로만 재계획, 그 사이는 직전 조준점 재사용
-        #    (MPPI 자체 계획 주기 << 제어 주기로 두면 lookahead 지점이 로봇 근처에 묶여
-        #    pursuit의 감속 로직이 항상 "곧 도착"으로 오판하는 정체가 실측으로 확인됨)
-        if self._local_goal is None or self._plan_step % self._replan_decimation == 0:
-            self._local_goal = self._planner.plan(obs.pos_xy, obs.yaw, goal_xy,
-                                                   obs.terrain_scan)
-        self._plan_step += 1
-        # 2. pursuit(PP) — 조준점을 명목 body 명령으로 변환 (로직 자체는 기존과 동일)
-        u = self._pursuit.plan(obs.pos_xy, obs.yaw, self._local_goal)
-        u = torch.clamp(u, self._last_u - self._du, self._last_u + self._du)
-        self._last_u = u
+        self._rl_adapter.update(obs, goal_xy)
+        cmd = self._rl_adapter.adapt(self.nominal_body_cmd(obs, goal_xy))
+        return self._targets_from_body_cmd(cmd, obs)
 
-        if self._params.base_tag == "ackermann":
-            v, delta = u[:, 0], u[:, 1]
-            omega = v * torch.tan(delta) / self._params.wheelbase
-            cmd = torch.stack([v, torch.zeros_like(v), omega], dim=1)
-        elif self._params.holonomic:
-            cmd = u
-        else:
-            v0, w = u[:, 0], u[:, 1]
-            if self._lin_pid is not None:
-                v0 = self._lin_pid.update(v0, obs.vel_b[:, 0], self._period)
-                w = self._yaw_pid.update(w, obs.ang_b[:, 2], self._period)
+    def compute_with_action(self, obs: ControlObs, goal_xy: torch.Tensor,
+                            action: torch.Tensor) -> JointTargets:
+        """학습용 외부 action을 controller parameter로 적용해 joint target을 계산한다."""
 
-                cap = self._lat_accel / torch.clamp(torch.abs(v0), min=0.1)
-                w = torch.clamp(w, -cap, cap)
-            cmd = torch.stack([v0, torch.zeros_like(v0), w], dim=1)
+        self._rl_adapter.set_action(action)
+        cmd = self._rl_adapter.adapt(self.nominal_body_cmd(obs, goal_xy))
+        return self._targets_from_body_cmd(cmd, obs)
 
-        # 3. governor(CBF) — 실시간 자세 기준 전복 방지 barrier로 cmd 투영
-        cmd = self._governor.filter(cmd, obs)
+    def nominal_body_cmd(self, obs: ControlObs, goal_xy: torch.Tensor) -> torch.Tensor:
+        """Pure Pursuit가 만든 scale 전 body command를 반환한다."""
 
-        pos = self._default_pose.clone()
-        steer = {}
-        if self._params.base_tag == "ackermann":
-            # governor가 w를 바꿨을 수 있어, 조향각을 필터링된 cmd에서 다시 유도한다
-            # (조향각 자체가 물리적으로 회전율을 만드는 기구이므로 독립적으로 못 바꿈)
-            v_safe = torch.where(cmd[:, 0].abs() > 1e-3, cmd[:, 0],
-                                 torch.ones_like(cmd[:, 0]) * 1e-3)
-            delta = torch.atan(self._params.wheelbase * cmd[:, 2] / v_safe)
-            steer = ik.ackermann_steer(delta, self._params)
-            for name, angle in steer.items():
-                pos[:, self._joint_index[name]] = angle
+        return self._to_body_cmd(self._tracker.plan(
+            obs.pos_xy, obs.yaw, goal_xy, self._rl_adapter.pp_params()))
 
-        # 4. ik — 액추에이터 배분·실현가능성 (기존 로직 그대로)
-        cmd = ik.feasible_scale(self._A, self._limits, cmd)
-        cmd_model = cmd.clone()
+    def _targets_from_body_cmd(self, cmd: torch.Tensor,
+                               obs: ControlObs) -> JointTargets:
+        """body command 제한과 타입별 IK를 적용한다."""
 
-        speeds = ik.wheel_speeds(self._A, cmd)
+        targets = self._joint_targets(self._limit_body_cmd(cmd), obs)
+        self._last_cmd = targets.cmd if targets.cmd is not None else cmd
+        return targets
 
-        for col, sname in self._front_wheels:
-            scale = 1.0 / torch.clamp(torch.cos(steer[sname]), min=0.5)
-            speeds[:, col] = torch.clamp(speeds[:, col] * scale,
-                                         -self._limits[col], self._limits[col])
+    def _limit_body_cmd(self, cmd: torch.Tensor) -> torch.Tensor:
+        """body command에 속도와 control-period당 변화량 제한을 적용한다."""
+
+        # 가속 한계 배율은 RL parameter로 로봇마다 조정된다 (기본 1.0)
+        accel_scale = torch.stack([
+            self._rl_adapter.lin_accel_scale,
+            self._rl_adapter.lin_accel_scale,
+            self._rl_adapter.yaw_accel_scale,
+        ], dim=1)
+        du = self._body_du.unsqueeze(0) * accel_scale
+        limited = torch.clamp(cmd, self._last_cmd - du, self._last_cmd + du)
+        vx_max = self._v_max * self._rl_adapter.drive_speed_scale
+        vy_max = self._v_max * self._rl_adapter.lateral_speed_scale
+        wz_max = self._w_max * self._rl_adapter.yaw_speed_scale
+        limited[:, 0] = torch.clamp(limited[:, 0], -vx_max, vx_max)
+        limited[:, 1] = torch.clamp(limited[:, 1], -vy_max, vy_max)
+        limited[:, 2] = torch.clamp(limited[:, 2], -wz_max, wz_max)
+        return limited
+
+    def _joint_targets(self, cmd: torch.Tensor, obs: ControlObs) -> JointTargets:
+        """조향 관절이 없는 기본 wheel velocity target을 만든다."""
+
+        cmd_model = feasible_scale(
+            self._A, self._limits, cmd, self._rl_adapter.wheel_yaw_scale)
         vel = torch.zeros_like(self._default_pose)
-        vel[:, self._wheel_idx] = speeds
-        return JointTargets(pos=pos, vel=vel, effort=None, cmd=cmd_model)
+        vel[:, self._wheel_idx] = wheel_speeds(
+            self._A, cmd_model, self._rl_adapter.wheel_yaw_scale)
+        return JointTargets(pos=self._default_pose.clone(), vel=vel,
+                            effort=None, cmd=cmd_model)
+
+    def _unicycle_bounds(self) -> tuple[list, float]:
+        """(v, w) 입력 경계와 명목 선회반경을 반환한다."""
+
+        r_turn = self._v_max / max(self._w_max, 1e-6)
+        return [[-self._v_max, self._v_max], [-self._w_max, self._w_max]], r_turn
+
+    @abstractmethod
+    def _control_bounds(self) -> tuple[list, float]:
+        pass
+
+    @abstractmethod
+    def _to_body_cmd(self, u: torch.Tensor) -> torch.Tensor:
+        pass

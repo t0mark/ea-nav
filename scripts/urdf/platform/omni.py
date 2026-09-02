@@ -24,14 +24,15 @@ class OmniGenerator(WheeledBase):
             "subtype": subtype, "total_mass": spec.total_mass(),
             "has_wheels": True, "has_legs": False,
         })
+        self._mark_wheeled_static_checks(spec, "omni")
         return spec
 
     def _build_mecanum(self, spec, rng):
 
         dims = self._sample_body_dims(rng)
         wheelbase = dims["length"] * self._u(rng, "wheelbase_factor")
-        radius = min(self._u(rng, "wheel_radius"), 0.5 * dims["length"], 0.45 * wheelbase)
-        radius = max(radius, 0.02)
+        radius = min(max(self._u(rng, "wheel_radius"), self._min_drive_radius(dims), 0.02),
+                     0.5 * dims["length"], 0.45 * wheelbase)
         wheel_w = radius * self._u(rng, "wheel_width_factor")
         clearance = max(radius * rng.uniform(0.3, 1.0), 0.02)
         geo = self._build_base(spec, rng, dims, clearance)
@@ -80,7 +81,8 @@ class OmniGenerator(WheeledBase):
         if k == 3:
             dims["shape"] = "cylinder"
             dims["length"] = dims["width"]
-        radius = max(min(self._u(rng, "wheel_radius"), 0.35 * dims["width"]), 0.02)
+        radius = min(max(self._u(rng, "wheel_radius"), self._min_drive_radius(dims), 0.02),
+                     0.35 * dims["width"])
         wheel_w = radius * self._u(rng, "wheel_width_factor")
         clearance = max(radius * rng.uniform(0.3, 1.0), 0.02)
         geo = self._build_base(spec, rng, dims, clearance)

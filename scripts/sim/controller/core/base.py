@@ -7,14 +7,9 @@ import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
-
-if TYPE_CHECKING:
-    # 타입 힌트 전용 — isaaclab 의존성을 base.py 런타임에 끌어들이지 않기 위해 지연 임포트
-    from .scan_terrain import TerrainScan
 
 @dataclass
 class UrdfJoint:
@@ -164,7 +159,7 @@ def extract_ctrl_params(urdf_path: Path, usd_dir: Path) -> RobotCtrlParams:
         name=meta["name"], control_tag=tag, base_tag=_base_tag(tag),
         wheel_radius=float(params.get("wheel_radius", 0.0)),
         max_lin_vel=float(params.get("max_lin_vel", 0.0)),
-        holonomic=_base_tag(tag) == "omni" and params.get("subtype") != "mecanum4",
+        holonomic=_base_tag(tag) == "omni",
     )
 
     metrics = meta["metrics"]
@@ -179,8 +174,15 @@ def extract_ctrl_params(urdf_path: Path, usd_dir: Path) -> RobotCtrlParams:
 
         j = model.joints[jname]
         R, p = zero_pose_frame(model, j.child)
+        # URDF 규약상 조인트 축은 자식 링크 프레임에 정의되므로, 링크 자세 R로 돌려
+        # base_link 기준 축을 얻는다. 링크 y축(R[:,1])을 그대로 쓰면 조인트가 y축이 아닌
+        # URDF(실로봇 풀에 흔함)에서 배분 행렬이 틀린 운동학을 만든다.
+        axis = R @ np.asarray(j.axis, dtype=float)
+        axis_norm = float(np.linalg.norm(axis))
+        if axis_norm < 1e-9:
+            raise ValueError(f"{jname}: 회전축 크기가 0 — URDF axis 표기 확인 필요")
         out.wheels.append(WheelFrame(joint=jname, link=j.child, pos=p,
-                                     axis=R[:, 1].copy()))
+                                     axis=axis / axis_norm))
         out.wheel_vel_limit[jname] = by_name[jname]["velocity"]
         out.wheel_effort_limit[jname] = by_name[jname]["effort"]
         if out.base_tag == "omni" and params.get("subtype") == "mecanum4":
@@ -209,7 +211,6 @@ class ControlObs:
     joint_vel: torch.Tensor | None = None
     gravity_b: torch.Tensor | None = None
     height_scan: torch.Tensor | None = None
-    terrain_scan: "TerrainScan | None" = None
 
     @classmethod
     def from_articulation(cls, art) -> "ControlObs":
@@ -267,12 +268,12 @@ def make_controller(urdf_path: Path, usd_dir: Path, cfg: dict,
                     num_envs: int, device: str, physics_dt: float, *,
                     policy_dir: Path | None = None) -> BaseController:
 
-    from ..wheeled.controller import WheeledRobotController
+    from ..wheeled import WHEELED_TAGS, make_wheeled_controller
 
     params = extract_ctrl_params(urdf_path, usd_dir)
-    if params.base_tag in ("diff", "skid", "ackermann", "omni"):
-        return WheeledRobotController(params, joint_names, default_pose,
-                                      num_envs, device, cfg, physics_dt)
+    if params.base_tag in WHEELED_TAGS:
+        return make_wheeled_controller(params, joint_names, default_pose,
+                                       num_envs, device, cfg, physics_dt)
     if params.base_tag in LEGGED_TAGS:
         from ..legged.controller import LeggedRobotController
 

@@ -8,7 +8,27 @@ validation:
   contact_band: 0.008
   contact_coplanar_tol: 0.008
   load_share_min: 0.35
+  load_share_max: 0.92
   overturn_max: 8.0
+  slope_static_angle: 0.2
+  slope_margin_min: 0.002
+  tip_accel_min: 1.8
+  wheeled:
+    body_width_length_min: 0.28
+    body_height_width_max: 1.25
+    body_height_track_max: 1.20
+    track_body_width_min: 0.80
+    wheel_radius_body_height_min: 0.10
+    clearance_wheel_radius_min: 0.20
+    clearance_wheel_radius_max: 1.15
+    diff_wheelbase_body_length_min: 0.28
+    skid_wheelbase_body_length_min: 0.35
+    skid_wheelbase_track_max: 1.50
+    ackermann_wheelbase_body_length_min: 0.45
+    ackermann_turn_radius_body_length_max: 4.5
+    omni_wheelbase_body_length_min: 0.35
+    omni_ring_body_width_min: 0.55
+    omni_roller_count_min: 10
 diff:
   body_shapes: [box, cylinder, cylinder_stack]
   body_length: [0.12, 1.2]

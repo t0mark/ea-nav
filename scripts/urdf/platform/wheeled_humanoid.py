@@ -50,6 +50,7 @@ class WheeledHumanoidGenerator(BaseGenerator):
             "base_type": base_type, "total_mass": spec.total_mass(),
             "has_upper_body": True,
         })
+        self._bases[base_type]._mark_wheeled_static_checks(spec, base_type)
         return spec
 
     def _add_torso(self, spec, rng, base_top: float) -> tuple[str, float]:

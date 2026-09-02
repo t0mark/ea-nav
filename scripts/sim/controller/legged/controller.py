@@ -8,8 +8,8 @@ import torch
 
 from ..core.base import (BaseController, ControlObs, JointTargets,
                          RobotCtrlParams)
-from ..core.track_pursuit import PurePursuit
-from . import low_rl
+from ..core.pure_pursuit import PurePursuit
+from .rl import bundle as low_rl
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,6 @@ class LeggedRobotController(BaseController):
         bounds = torch.tensor([[-v_max, v_max], [-w_max, w_max]], device=device)
         self._pp = PurePursuit("unicycle", bounds, pp_cfg, num_envs, device,
                                decel=float(cfg["ctrl"]["lin_accel"]),
-                               lat_accel=float(pp_cfg["lat_accel"]),
                                pivot_creep=0.0)
 
     def reset(self, env_ids: torch.Tensor | None = None):

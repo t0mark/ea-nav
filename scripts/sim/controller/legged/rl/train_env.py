@@ -14,8 +14,8 @@ from rsl_rl.env import VecEnv
 from isaaclab.sensors import (ContactSensor, ContactSensorCfg, RayCaster,
                               RayCasterCfg, patterns)
 
-from scripts.sim.controller.legged import low_rl
-from scripts.sim.controller.legged.train import rewards
+from scripts.sim.controller.legged.rl import bundle as low_rl
+from scripts.sim.controller.legged.rl import rewards
 from scripts.sim.utils.environment import SimEnvironment
 
 logger = logging.getLogger(__name__)

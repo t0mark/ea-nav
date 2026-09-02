@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ..core.base import UrdfModel, parse_urdf, zero_pose_frame
+from ...core.base import UrdfModel, parse_urdf, zero_pose_frame
 
 FORM_SLOTS = {"quad": (4, 4), "hex": (6, 4), "humanoid": (2, 6)}
 
