@@ -1,0 +1,18 @@
+# 4륜 메카넘 전방향 구동 로봇 제어기 파라미터 스키마
+# scripts/sim/controller/wheeled/omni_drive.py의 OmniDriveKinematics 생성자 인자와 1:1 대응
+# 3륜 트라이크형(pepper 등)·캐스터 기반(pr2 등)은 이 기구학이 맞지 않으므로 대상에서 제외한다
+
+usd_path: null                # data/sim/usd/real_robot/wheeled/omni/ 밑의 파일명만
+wheel_radius: null             # 바퀴 반지름 (m)
+half_wheelbase: null           # 로봇 중심 - 앞/뒤 차축 간 거리의 절반 (m)
+half_track_width: null         # 로봇 중심 - 좌/우 바퀴 간 거리의 절반 (m)
+wheel_joint_names:              # 순서 고정 - front_left/front_right/rear_left/rear_right
+  front_left: null
+  front_right: null
+  rear_left: null
+  rear_right: null
+direction_sign: 1.0             # 양수 명령이 실제로 후진이면 -1.0
+rotation_sign: 1.0              # 양수 wz가 실제로 반대로 돌면 -1.0 (메카넘 롤러 배치 차이, 전진과 별개)
+nav_linear_velocity: null        # pure pursuit 순항 속도 (m/s) - 실측 속도에 안전 마진을 곱한 값
+nav_max_angular_velocity: null   # pure pursuit 최대 각속도 (rad/s) - 마찰 효율이 나는 한도 안의 값
+# 위 네 값 모두 usd_export_config.py가 로봇을 실제로 짧게 굴려서 실측해 채운다

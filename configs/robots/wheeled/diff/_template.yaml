@@ -1,0 +1,14 @@
+# 차동 구동(differential drive) 로봇 제어기 파라미터 스키마
+# scripts/sim/controller/wheeled/diff_drive.py의 DifferentialDriveKinematics 생성자 인자와 1:1 대응
+# 실제 값은 로봇마다 다르므로, 로봇 도입 시 USD/사양을 확인해 채운다 (여기서는 필드 자리만 정의)
+
+usd_path: null               # data/sim/usd/real_robot/wheeled/diff/ 밑의 파일명만 (예: jackal.usd)
+wheel_radius: null           # 바퀴 반지름 (m)
+wheel_base: null              # 좌우 바퀴 중심 간 거리 (m)
+left_wheel_joint_names: []    # 좌측 바퀴 관절 이름 목록
+right_wheel_joint_names: []   # 우측 바퀴 관절 이름 목록
+direction_sign: 1.0            # 양수 각속도가 실제로 후진이면 -1.0
+rotation_sign: 1.0              # 양수 w가 실제로 반대로 돌면 -1.0 (전진과 독립적으로 어긋날 수 있음)
+nav_linear_velocity: null       # pure pursuit 순항 속도 (m/s) - 실측 속도에 안전 마진을 곱한 값
+nav_max_angular_velocity: null  # pure pursuit 최대 각속도 (rad/s) - 마찰 효율이 나는 한도 안의 값
+# 위 네 값 모두 usd_export_config.py가 로봇을 실제로 짧게 굴려서 실측해 채운다

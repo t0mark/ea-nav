@@ -1,0 +1,13 @@
+usd_path: clearpath_jackal.usd
+wheel_radius: 0.1
+wheel_base: 0.37559
+left_wheel_joint_names:
+- front_left_wheel_joint
+- rear_left_wheel_joint
+right_wheel_joint_names:
+- front_right_wheel_joint
+- rear_right_wheel_joint
+direction_sign: 1.0
+nav_linear_velocity: 0.3589
+rotation_sign: 1.0
+nav_max_angular_velocity: 4.5

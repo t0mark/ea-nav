@@ -1,0 +1,11 @@
+# 휴머노이드(이족보행) 로봇 RL 보행 정책 파라미터 스키마
+# scripts/sim/controller/legged/rl/loco_rl_env.py의 LeggedRobotCfg와 1:1 대응
+# humanoid는 undesired_contact_body_names 대신 feet_air_time_positive_biped + feet_slide 보상으로
+# 호핑(양발 동시 공중) 문제를 억제한다 - rewards.py의 HumanoidRewardsCfg 참고
+
+usd_path: null                # data/sim/usd/real_robot/legged/humanoid/ 밑의 파일명만
+morphology_group: humanoid
+base_body_name: null          # torso/pelvis 등 몸통 링크 이름
+foot_body_names: null         # 발목/발 링크 이름 정규식
+action_scale: 0.5
+default_joint_pos: {}         # 기본 자세 0이 리밋을 벗어나는 관절만 {관절 이름: 리밋 중앙값}

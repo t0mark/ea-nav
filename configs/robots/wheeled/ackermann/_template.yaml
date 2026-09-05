@@ -1,0 +1,13 @@
+# 애커먼 조향(ackermann steering) 로봇 제어기 파라미터 스키마
+# scripts/sim/controller/wheeled/ackermann.py의 AckermannKinematics 생성자 인자와 1:1 대응
+
+usd_path: null                  # data/sim/usd/real_robot/wheeled/ackermann/ 밑의 파일명만
+wheelbase: null                 # 앞뒤 차축 간 거리 (m)
+track_width: null               # 좌우 바퀴 간 거리 (m)
+wheel_radius: null              # 바퀴 반지름 (m)
+left_steering_joint_name: null  # 좌측 조향 관절 이름
+right_steering_joint_name: null # 우측 조향 관절 이름
+drive_wheel_joint_names: []     # 구동 바퀴 관절 이름 목록
+direction_sign: 1.0             # 양수 구동 속도가 실제로 후진이면 -1.0
+steering_sign: 1.0              # 양수 조향각이 실제로 반대로 꺾이면 -1.0 (구동과 독립적으로 어긋날 수 있음)
+# 자동 추출 대상이 아니라(모듈 docstring 참고) 위 두 부호는 로봇을 직접 굴려보고 사람이 정한다

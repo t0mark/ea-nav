@@ -1,0 +1,11 @@
+usd_path: nvidia_carter_v1.usd
+wheel_radius: 0.24082
+wheel_base: 0.62841
+left_wheel_joint_names:
+- left_wheel
+right_wheel_joint_names:
+- right_wheel
+direction_sign: 1.0
+nav_linear_velocity: 0.8122
+rotation_sign: 1.0
+nav_max_angular_velocity: 2.0

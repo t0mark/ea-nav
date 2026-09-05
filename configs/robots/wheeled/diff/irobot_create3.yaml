@@ -1,0 +1,11 @@
+usd_path: irobot_create3.usd
+wheel_radius: 0.03575
+wheel_base: 0.233
+left_wheel_joint_names:
+- left_wheel_joint
+right_wheel_joint_names:
+- right_wheel_joint
+direction_sign: 1.0
+nav_linear_velocity: 0.1416
+rotation_sign: 1.0
+nav_max_angular_velocity: 2.0

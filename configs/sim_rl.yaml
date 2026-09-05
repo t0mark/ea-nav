@@ -1,0 +1,47 @@
+# RL 학습용 커리큘럼 지형 구성
+# 시각 검증용 configs/sim_terrain.yaml과 파서(scripts/sim/env/terrain.py)는 동일하게 재사용하지만,
+# curriculum: true로 행(row)마다 난이도가 오름차순이 되게 하고, 그 승급·강등 판단은
+# scripts/sim/env/rl.py의 promote_terrain_levels_by_travel_distance()가 담당한다.
+
+seed: 42
+curriculum: true             # 행마다 난이도 오름차순 - 로봇 성능에 따라 승급/강등 (env/rl.py 참고)
+
+size: [8.0, 8.0]
+border_width: 5.0
+num_rows: 10                  # 난이도 단계를 세분화 - 낮은 단차/완만한 경사부터 최대치까지 10단계
+num_cols: 20                  # 4가지 서브 지형 타입이 각 열에 고르게 섞이도록 시각 검증용보다 크게
+
+horizontal_scale: 0.1
+vertical_scale: 0.005
+slope_threshold: 0.75
+color_scheme: height
+
+sub_terrains:
+  pyramid_stairs:              # 오르막 계단 - row 0은 연석 수준(2cm)에 가까워 사실상 평지 보행 학습부터 시작
+    type: mesh_pyramid_stairs
+    proportion: 0.25
+    step_height_range: [0.02, 0.25]
+    step_width: 0.3
+    platform_width: 2.0
+    border_width: 1.0
+    holes: false
+  pyramid_stairs_inv:          # 내리막 계단
+    type: mesh_pyramid_stairs_inv
+    proportion: 0.25
+    step_height_range: [0.02, 0.25]
+    step_width: 0.3
+    platform_width: 2.0
+    border_width: 1.0
+    holes: false
+  pyramid_slope:                # 오르막 경사 - row 0은 거의 평지, row 9는 tan(35도)
+    type: hf_pyramid_slope
+    proportion: 0.25
+    slope_range: [0.0, 0.7]
+    platform_width: 2.0
+    border_width: 0.25
+  pyramid_slope_inv:            # 내리막 경사
+    type: hf_pyramid_slope_inv
+    proportion: 0.25
+    slope_range: [0.0, 0.7]
+    platform_width: 2.0
+    border_width: 0.25

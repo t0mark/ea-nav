@@ -1,0 +1,11 @@
+__pycache__/
+
+.vscode/
+.claude/
+
+check/
+data/
+# isaac-cache/
+
+# plan.md
+# agent.md

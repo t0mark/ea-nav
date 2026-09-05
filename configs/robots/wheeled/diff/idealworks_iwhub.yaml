@@ -1,0 +1,11 @@
+usd_path: idealworks_iwhub.usd
+wheel_radius: 0.08107
+wheel_base: 0.57926
+left_wheel_joint_names:
+- left_wheel_joint
+right_wheel_joint_names:
+- right_wheel_joint
+direction_sign: 1.0
+nav_linear_velocity: 0.2954
+rotation_sign: 1.0
+nav_max_angular_velocity: 3.0

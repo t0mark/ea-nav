@@ -1,0 +1,11 @@
+usd_path: robotis_turtlebot3.usd
+wheel_radius: 0.03301
+wheel_base: 0.16
+left_wheel_joint_names:
+- wheel_left_joint
+right_wheel_joint_names:
+- wheel_right_joint
+direction_sign: 1.0
+nav_linear_velocity: 0.1241
+rotation_sign: 1.0
+nav_max_angular_velocity: 2.0

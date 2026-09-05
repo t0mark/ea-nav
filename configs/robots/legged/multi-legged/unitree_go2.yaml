@@ -1,0 +1,11 @@
+usd_path: unitree_go2.usd
+morphology_group: quadruped
+base_body_name: base
+foot_body_names: FL_foot|FR_foot|RL_foot|RR_foot
+action_scale: 0.5
+default_joint_pos:
+  FL_calf_joint: -1.78023
+  FR_calf_joint: -1.78023
+  RL_calf_joint: -1.78023
+  RR_calf_joint: -1.78023
+undesired_contact_body_names: FL_calf|FR_calf|RL_calf|RR_calf

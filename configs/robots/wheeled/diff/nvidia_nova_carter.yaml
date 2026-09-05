@@ -1,0 +1,11 @@
+usd_path: nvidia_nova_carter.usd
+wheel_radius: 0.14013
+wheel_base: 0.4132
+left_wheel_joint_names:
+- joint_wheel_left
+right_wheel_joint_names:
+- joint_wheel_right
+direction_sign: 1.0
+nav_linear_velocity: 0.4959
+rotation_sign: 1.0
+nav_max_angular_velocity: 2.0

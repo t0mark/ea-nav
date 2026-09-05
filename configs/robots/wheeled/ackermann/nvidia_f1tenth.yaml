@@ -1,0 +1,34 @@
+# NVIDIA 공식 F1TENTH(Traxxas Slash 기반 1/10 스케일 RC카) 애커먼 조향 config
+# 출처: https://github.com/NVIDIA-Omniverse/sample-ackermann-amr (NVIDIA-Omniverse 공식 GitHub 조직)
+# 원본은 여러 층(sublayer)으로 나뉜 USD라 pxr의 Stage.Flatten()으로 로봇당 완성본 usd 파일 하나로
+# 합쳤다 - Deep Robotics 계열 애셋을 처리했던 것과 동일한 방식(data/urdf/real_robot/manifest.md 참고).
+#
+# wheelbase/track_width/wheel_radius는 usd를 직접 열어(pxr) 바퀴 4개의 월드 좌표계 바운딩 박스
+# 중심으로 실측했다 - 앞바퀴 x=+0.15, 뒷바퀴 x=-0.17 (wheelbase=0.32m), 좌우 바퀴 y=±0.12
+# (track_width=0.24m), 바퀴 지름 0.104m(반지름 0.052m). 실측값이 Traxxas Slash 실제 스펙(휠베이스
+# 약 313mm)과 거의 일치해 스케일이 올바르게 반영됐음을 확인했다.
+#
+# 실제 하드웨어(Traxxas Slash 기반)는 후륜 구동이라, 앞바퀴(Wheel__Knuckle__Front_*)는 조향 너클을
+# 따라 돌기만 하고 구동 명령을 받지 않는다 - drive_wheel_joint_names에는 뒷바퀴만 넣는다.
+
+usd_path: nvidia_f1tenth.usd
+wheelbase: 0.32
+track_width: 0.24
+wheel_radius: 0.052
+left_steering_joint_name: Knuckle__Upright__Front_Left
+right_steering_joint_name: Knuckle__Upright__Front_Right
+drive_wheel_joint_names:
+  - Wheel__Upright__Rear_Left
+  - Wheel__Upright__Rear_Right
+
+# 실측 결과: 구동 바퀴 축은 양수 명령이 실제로 후진을 만들었다(direction_sign=-1.0 필요).
+# 조향 관절은 양수 각도 명령이 실제로 좌회전(CCW)을 만들어 기존 부호 규약과 이미 일치했다.
+direction_sign: -1.0
+steering_sign: 1.0
+
+# ackermann은 아직 diff/omni처럼 nav 속도를 자동 실측하지 않는다 - 기본값(0.2m/s)은 이 차량의
+# 무거운 서스펜션·마찰 임계값을 넘기기엔 너무 작아 사실상 못 움직였다(실측: raw 바퀴 명령 30rad/s일
+# 때만 유의미하게 움직임 -> nav_linear_velocity = 30 * wheel_radius(0.052) = 1.56m/s로 역산).
+# nav_max_angular_velocity는 그 속도에서 조향각이 현실적인 범위(약 30도) 안에 들어오도록 낮췄다.
+nav_linear_velocity: 1.5
+nav_max_angular_velocity: 2.5
