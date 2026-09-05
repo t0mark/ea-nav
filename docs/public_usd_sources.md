@@ -11,8 +11,8 @@
 |---|---|---|
 | 바퀴형 | 14 | NVIDIA Isaac Sim Nucleus 공식 자산 |
 | 다족보행 | 17 | NVIDIA Isaac Sim Nucleus + Unitree + Deep Robotics 공식 저장소 |
-| 휴머노이드 | 18 | NVIDIA Isaac Sim Nucleus + Unitree + LimX Dynamics 공식 저장소 |
-| **합계** | **49** | |
+| 휴머노이드 | 17 | NVIDIA Isaac Sim Nucleus + Unitree + LimX Dynamics 공식 저장소 |
+| **합계** | **48** | |
 
 ## 1. 바퀴형 (14종)
 
@@ -53,7 +53,7 @@
 
 **제외함**: `Robots/NTNU/ARL-Robot-1/` — 실제 스폰 검증 과정에서 확인해보니 다족보행 로봇이 아니라 프로펠러 4개가 고정 관절(PhysicsFixedJoint)로 붙은 드론(쿼드콥터)이었음. 회전/직동 관절이 없어 관절 기반 로봇 검증에도 안 맞고, plan.md의 타겟 하드웨어(바퀴형/다족보행/휴머노이드)에도 해당하지 않아 목록에서 제외.
 
-## 3. 휴머노이드 (18종)
+## 3. 휴머노이드 (17종)
 
 | 로봇 | 제공처 | 출처 |
 |---|---|---|
@@ -65,7 +65,6 @@
 | Neo | 1X | Isaac Sim Nucleus(5.1) `Robots/1X/Neo/Neo.usd` |
 | STAR1 | RobotEra | Isaac Sim Nucleus(5.1) `Robots/RobotEra/STAR1/star1.usd` |
 | Phoenix | SanctuaryAI | Isaac Sim Nucleus(5.1) `Robots/SanctuaryAI/Phoenix/phoenix.usd` |
-| Tien Kung | XHumanoid | Isaac Sim Nucleus(5.1) `Robots/XHumanoid/Tien Kung/tienkung.usd` |
 | PX5 | XiaoPeng | Isaac Sim Nucleus(5.1) `Robots/XiaoPeng/PX5/px5.usd` |
 | A2D | Agibot | Isaac Sim Nucleus(5.1) `Robots/Agibot/A2D/A2D.usd` |
 | T1 (locomotion) | Booster Robotics | Isaac Sim Nucleus(5.1) `Robots/BoosterRobotics/BoosterT1/T1_locomotion.usd` |
@@ -75,6 +74,8 @@
 | TRON2A WF(하반신, 바퀴-다리 하이브리드) | LimX Dynamics | 위와 동일 저장소 — 발 대신 바퀴가 달린 변형 |
 
 **확인 결과 없는 것**: Tesla Optimus, PAL Talos, Ghost Robotics 계열, Booster K1/T2(T1만 확인), Unitree R1/H2 Plus, Galbot 휴머노이드 라인(`galbot_s1_description`은 지오메트리 페이로드만 있고 완성된 진입점 USD가 없어 제외), Agibot X2/X2Ultra(공개 저장소는 URDF만 확인됨).
+
+**뒤늦게 제외함**: Tien Kung(XHumanoid) — 이 조사 당시엔 스폰 검증(화면에 정상적으로 나옴)까지만 확인했는데, 이후 legged RL 학습 파이프라인 전수 검증(2026-09-06)에서 관절 트리 루트가 3개(몸통+양손이 서로 미연결)인 결함이 발견돼 usd·urdf를 전부 삭제했다 - 자세한 내용은 `data/urdf/real_robot/manifest.md`의 "원본 자체의 한계라 삭제한 것" 참고. 스폰 검증만으로는 킨매틱 트리 연결성까지 보장하지 못한다는 사례.
 
 ## 방법론 메모
 

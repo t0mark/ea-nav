@@ -1,0 +1,7 @@
+usd_path: onex_neo.usd
+morphology_group: humanoid
+base_body_name: link_pelvis
+foot_body_names: link_l_foot|link_r_foot
+action_scale: 0.5
+actuator_stiffness: 207.68
+actuator_damping: 4.1536

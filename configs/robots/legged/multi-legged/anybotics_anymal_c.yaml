@@ -1,0 +1,8 @@
+usd_path: anybotics_anymal_c.usd
+morphology_group: quadruped
+base_body_name: base
+foot_body_names: LF_FOOT|LH_FOOT|RF_FOOT|RH_FOOT
+action_scale: 0.5
+undesired_contact_body_names: LF_shank_fixed|LH_shank_fixed|RF_shank_fixed|RH_shank_fixed
+actuator_stiffness: 80.0
+actuator_damping: 1.6

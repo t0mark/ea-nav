@@ -1,4 +1,4 @@
-"""wheeled/legged 컨트롤러 구동 테스트 진입점 - --category로 어느 쪽을 테스트할지 고른다.
+"""wheeled/legged 컨트롤러 구동 테스트 진입점 - --robot-type으로 어느 쪽을 테스트할지 고른다.
 
 wheeled는 config yaml이 없으면 scripts/sim/utils/usd_export_config.py로 자동 생성한 뒤 바로 테스트를
 이어간다(로봇 자체의 물리 형상에서 뽑아낼 수 있는 값이라 사람이 미리 채워둘 필요가 없음). legged는
@@ -13,13 +13,13 @@ base/foot 링크를 형상만으로 자동 판별할 근거가 약해 자동 추
 
 사용법:
     # wheeled 파일럿 - 서브카테고리(diff/ackermann/omni)별 대표 로봇만, 영상+궤적 이미지 저장
-    /workspace/isaaclab/isaaclab.sh -p tools/04_controller_test.py --category wheeled --mode pilot
+    /workspace/isaaclab/isaaclab.sh -p tools/04_controller_test.py --robot-type wheeled --mode pilot
 
     # wheeled 본 실행 - 전체 로봇, 판정만
-    /workspace/isaaclab/isaaclab.sh -p tools/04_controller_test.py --category wheeled --mode full
+    /workspace/isaaclab/isaaclab.sh -p tools/04_controller_test.py --robot-type wheeled --mode full
 
     # 로봇 1종 지정
-    /workspace/isaaclab/isaaclab.sh -p tools/04_controller_test.py --category wheeled --mode pilot --robot-id clearpath_jackal
+    /workspace/isaaclab/isaaclab.sh -p tools/04_controller_test.py --robot-type wheeled --mode pilot --robot-id clearpath_jackal
 """
 
 import argparse
@@ -34,7 +34,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
 
 parser = argparse.ArgumentParser(description="wheeled/legged 컨트롤러 구동 테스트")
-parser.add_argument("--category", type=str, required=True, choices=["wheeled", "legged"], help="테스트할 제어기 계열")
+parser.add_argument("--robot-type", type=str, required=True, choices=["wheeled", "legged"], help="테스트할 제어기 계열")
 parser.add_argument("--robot-id", type=str, default=None, help="로봇 1종만 테스트 (생략 시 --mode 기준으로 여러 종)")
 parser.add_argument(
     "--mode", type=str, required=True, choices=["pilot", "full"], help="pilot=영상·궤적 이미지+대표 소수, full=판정만+전체"
@@ -327,10 +327,25 @@ class _LeggedRobotTest:
 
         camera = spawn_capture_camera("/World/TestCamera") if self._mode == "pilot" else None
         goal_marker = spawn_goal_marker() if self._mode == "pilot" else None
+        if camera is not None:
+            # 센서는 "다음 play 이벤트"에서 초기화되는데, LocoRunner 생성 시점(ManagerBasedRLEnv
+            # 생성자 안의 sim.reset())에 그 이벤트를 이미 다 써버린 뒤라, 여기서 만든 카메라는
+            # 그대로 두면 초기화가 안 된다(_ALL_INDICES 같은 내부 속성이 없다는 에러로 나타남) -
+            # reset()을 한 번 더 호출해 새 play 이벤트를 만들어야 한다(usd_export_config.py의
+            # ContactSensor에서 이미 겪은 것과 같은 문제).
+            runner.env.sim.reset()
+        # legged 로봇은 학습 안전을 위해 지면 위로 살짝 띄워 스폰된다(scripts/sim/env/robot_spawn.py의
+        # ground_clearance) - 그 상태 그대로 카메라를 맞추면, 이후 중력으로 가라앉아 정착한 실제
+        # 높이와 어긋나 로봇이 화면에서 잘려 보인다. 정책으로 제자리에서 몇 스텝 서 있게 해 정착시킨
+        # 뒤에 그 자세를 기준으로 카메라를 맞춘다.
+        settle_command = torch.zeros((1, 3), device=runner.env.device)
+        for _ in range(60):
+            runner.compute_joint_targets(settle_command)
+
+        start = (robot.data.root_pos_w[0, 0].item(), robot.data.root_pos_w[0, 1].item())
         robot_prim_path = f"{runner.env.scene.env_prim_paths[0]}/Robot"
         chase_camera = _ChaseCamera(robot_prim_path) if camera is not None else None
 
-        start = (0.0, 0.0)
         path: Path2D = generate_l_shaped_path(start, _LEG_LENGTH_M)
         tracker = PurePursuitTracker()
 
@@ -364,10 +379,10 @@ class _LeggedRobotTest:
 
 
 def main() -> None:
-    """--category/--mode에 따라 로봇을 고르고, 하나씩 테스트해 결과를 요약 출력한다."""
+    """--robot-type/--mode에 따라 로봇을 고르고, 하나씩 테스트해 결과를 요약 출력한다."""
     results: dict[str, bool] = {}
 
-    if args_cli.category == "wheeled":
+    if args_cli.robot_type == "wheeled":
         robots = _select_robots(_discover_wheeled_robots(), args_cli.robot_id, args_cli.mode)
 
         sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1 / 60))

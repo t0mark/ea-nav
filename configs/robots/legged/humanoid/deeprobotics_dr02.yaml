@@ -1,0 +1,7 @@
+usd_path: deeprobotics_dr02.usd
+morphology_group: humanoid
+base_body_name: base_link
+foot_body_names: left_ankle_x_link|right_ankle_x_link
+action_scale: 0.5
+actuator_stiffness: 363.0
+actuator_damping: 7.26

@@ -9,3 +9,5 @@ base_body_name: null          # torso/pelvis 등 몸통 링크 이름
 foot_body_names: null         # 발목/발 링크 이름 정규식
 action_scale: 0.5
 default_joint_pos: {}         # 기본 자세 0이 리밋을 벗어나는 관절만 {관절 이름: 리밋 중앙값}
+actuator_stiffness: 25.0      # 관절 PD 게인 - usd authored 값은 안 믿고 effort 한계에서 역산 (usd_export_config.py 참고)
+actuator_damping: 0.5         # stiffness의 약 2%

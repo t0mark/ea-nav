@@ -1,0 +1,7 @@
+usd_path: agility_digit.usd
+morphology_group: humanoid
+base_body_name: torso_base
+foot_body_names: left_leg_toe_roll|right_leg_toe_roll
+action_scale: 0.5
+actuator_stiffness: 25.0
+actuator_damping: 0.5

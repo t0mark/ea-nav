@@ -32,6 +32,11 @@ legged의 몸통·발은 물리 시뮬레이션이 전혀 필요 없다 - 둘 �
     이전에 로봇을 실제로 스폰해 중력으로 정지시킨 뒤 접지를 실측하던 방식은, 기본 자세가 서 있는
     자세라는 보장이 없어 로봇마다 다른 이유로 실패해서 폐기했다.
 
+    관절 PD 게인(actuator_stiffness/damping)도 같은 이유로 USD authored 값을 그대로 안 믿는다 -
+    URDF->USD 변환기가 정지 자세를 딱딱하게 붙잡아두려고 넣은 값(관측됨: unitree_go2 stiffness 1e7,
+    damping 1e5 - Isaac Lab 공식 값 25/0.5의 40만 배)이라 RL 학습에 못 쓴다. 대신 authored 관절
+    effort 한계(최대 토크)에서 Isaac Lab 공식 로봇들의 비율을 참고해 역산한다(_compute_actuator_gains).
+
 pxr는 Kit 프로세스가 뜬 뒤에만 임포트할 수 있으므로, 이 모듈의 함수는 AppLauncher 부팅이 끝난
 tools/ 진입점에서만 호출해야 한다(capture.py와 동일한 전제) - legged 쪽은 스폰은 안 하지만 pxr
 자체가 Isaac Sim 번들 파이썬에서만 임포트되므로 이 제약이 똑같이 적용된다.
@@ -426,18 +431,22 @@ def export_wheeled_robot_config(
     print(f"[usd_export_config] {output_path} 자동 생성 완료: {config}")
 
 
-def _build_kinematic_tree(stage, root_prim_path: str) -> tuple[dict[str, str], dict[str, bool], set[str]]:
+def _build_kinematic_tree(
+    stage, root_prim_path: str
+) -> tuple[dict[str, str], dict[str, bool], dict[str, str], set[str]]:
     """관절의 body0(부모)/body1(자식) relationship과 그 관절이 fixed인지를 모아 트리를 구성한다.
 
     스폰된 라이브 스테이지든, Usd.Stage.Open()으로 직접 연 파일이든 똑같이 동작한다 - USD
     관절 스키마(body0/body1 relationship)는 물리 시뮬레이션 여부와 무관한 저장된 데이터이기
-    때문이다. 반환값: {자식: 부모}, {자식: 그 관절이 fixed인지}, 전체 바디 경로 집합.
+    때문이다. 반환값: {자식: 부모}, {자식: 그 관절이 fixed인지}, {자식: 그 관절의 이름}, 전체 바디
+    경로 집합.
     """
     from pxr import Usd, UsdPhysics
 
     root_prim = stage.GetPrimAtPath(root_prim_path)
     parent_of: dict[str, str] = {}
     is_fixed_joint: dict[str, bool] = {}
+    joint_name_of: dict[str, str] = {}
     all_bodies: set[str] = set()
     for prim in Usd.PrimRange(root_prim):
         if not prim.IsA(UsdPhysics.Joint):
@@ -450,9 +459,29 @@ def _build_kinematic_tree(stage, root_prim_path: str) -> tuple[dict[str, str], d
         parent_path, child_path = str(body0_targets[0]), str(body1_targets[0])
         parent_of[child_path] = parent_path
         is_fixed_joint[child_path] = prim.IsA(UsdPhysics.FixedJoint)
+        joint_name_of[child_path] = prim.GetName()
         all_bodies.add(parent_path)
         all_bodies.add(child_path)
-    return parent_of, is_fixed_joint, all_bodies
+    return parent_of, is_fixed_joint, joint_name_of, all_bodies
+
+
+def _leg_chain_joint_names(
+    foot_leaves: list[str], parent_of: dict[str, str], joint_name_of: dict[str, str]
+) -> set[str]:
+    """각 발 링크에서 루트까지 거슬러 올라가며 지나는 관절 이름을 모은다 (다리 체인 전용).
+
+    로봇 전체 관절이 아니라 다리 체인 관절만 걸러야 하는 이유: humanoid는 손가락처럼 다리와 무관한
+    관절이 많아서(관측됨: fourier_gr1 - 다리 관절 12개 vs 손가락 등 나머지 44개, 손가락 토크가 훨씬
+    작아 관절 전체 중앙값을 쓰면 다리에 필요한 토크보다 훨씬 작은 값이 나옴), actuator 게인은 실제로
+    체중을 지탱·보행하는 다리 관절 기준으로만 잡아야 한다.
+    """
+    names: set[str] = set()
+    for foot_path in foot_leaves:
+        current = foot_path
+        while current in parent_of:
+            names.add(joint_name_of[current])
+            current = parent_of[current]
+    return names
 
 
 def _find_root_body(parent_of: dict[str, str], all_bodies: set[str]) -> str:
@@ -530,6 +559,46 @@ def _compute_default_joint_overrides(stage, root_prim_path: str) -> dict[str, fl
     return overrides
 
 
+def _compute_actuator_gains(stage, root_prim_path: str, leg_joint_names: set[str]) -> tuple[float, float]:
+    """다리 체인 관절의 authored 최대 토크(effort limit) 중앙값으로 PD 게인을 추정한다.
+
+    USD에 authored된 stiffness/damping 값 자체는 신뢰하지 않는다 - URDF->USD 변환기가 "정지 자세를
+    딱딱하게 붙잡아두기 위한" 임의의 큰 값(관측됨: unitree_go2 stiffness 1e7, damping 1e5)을 넣는
+    경우가 흔해서, RL 학습에 그대로 쓰면 관절이 사실상 위치 고정에 가깝게 거동해 정책이 자연스러운
+    토크를 못 낸다. 대신 Isaac Lab 공식 로봇 설정(A1, Go2 등: effort_limit 23.5~45 -> stiffness=25,
+    damping=0.5 / H1: effort_limit 100~300 -> stiffness 20~200, damping 4~10)을 대조해보면, 로봇
+    스케일이 달라도 stiffness가 대략 그 로봇 관절의 최대 토크(effort limit)와 같은 자릿수이고
+    damping은 stiffness의 약 2%인 경향이 있다 - 이 비율을 일반 공식으로 채택한다.
+
+    leg_joint_names로 다리 체인 관절만 걸러서 본다 - 로봇 전체 관절로 중앙값을 내면 humanoid의 손가락
+    관절(수가 많고 토크가 훨씬 작음)에 밀려 다리에 필요한 값보다 훨씬 작게 나온다(관측됨: fourier_gr1
+    - 다리 관절 12개는 최대 133인데 손가락 등 나머지 44개가 대부분 1~10이라, 전체로 계산하면
+    stiffness가 4 근처까지 떨어짐 - 다리 12개만 걸러야 133 근처의 제대로 된 값이 나온다).
+    """
+    from pxr import Usd, UsdPhysics
+
+    root_prim = stage.GetPrimAtPath(root_prim_path)
+    effort_limits: list[float] = []
+    for prim in Usd.PrimRange(root_prim):
+        if not prim.IsA(UsdPhysics.RevoluteJoint) or prim.GetName() not in leg_joint_names:
+            continue
+        drive = UsdPhysics.DriveAPI.Get(prim, "angular")
+        if drive is None:
+            continue
+        max_force_attr = drive.GetMaxForceAttr()
+        if max_force_attr.HasAuthoredValue() and max_force_attr.Get() > 0.0:
+            effort_limits.append(max_force_attr.Get())
+
+    if not effort_limits:
+        return 25.0, 0.5  # authored effort 한계가 전혀 없으면 Isaac Lab 사족보행 기본값으로 대체
+
+    effort_limits.sort()
+    median_effort = effort_limits[len(effort_limits) // 2]
+    stiffness = round(median_effort, 3)
+    damping = round(stiffness * 0.02, 4)
+    return stiffness, damping
+
+
 def export_legged_robot_config(usd_path: Path, robot_category: str, output_path: Path) -> None:
     """usd 파일을 열어(스폰·물리 없이) 관절 구조와 authored 자세만으로 config를 만들어 저장한다.
 
@@ -547,7 +616,7 @@ def export_legged_robot_config(usd_path: Path, robot_category: str, output_path:
     stage = Usd.Stage.Open(str(usd_path))
     root_prim_path = str(stage.GetDefaultPrim().GetPath())
 
-    parent_of, is_fixed_joint, all_bodies = _build_kinematic_tree(stage, root_prim_path)
+    parent_of, is_fixed_joint, joint_name_of, all_bodies = _build_kinematic_tree(stage, root_prim_path)
     root_body_path = _find_root_body(parent_of, all_bodies)
     leaf_body_paths = _find_leaf_bodies(parent_of, all_bodies)
 
@@ -582,6 +651,11 @@ def export_legged_robot_config(usd_path: Path, robot_category: str, output_path:
     default_joint_pos = _compute_default_joint_overrides(stage, root_prim_path)
     if default_joint_pos:
         config["default_joint_pos"] = default_joint_pos
+
+    leg_joint_names = _leg_chain_joint_names(foot_leaves, parent_of, joint_name_of)
+    config["actuator_stiffness"], config["actuator_damping"] = _compute_actuator_gains(
+        stage, root_prim_path, leg_joint_names
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:

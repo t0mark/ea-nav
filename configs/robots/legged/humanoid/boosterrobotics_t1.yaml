@@ -1,0 +1,7 @@
+usd_path: boosterrobotics_t1.usd
+morphology_group: humanoid
+base_body_name: Trunk
+foot_body_names: left_foot_link|right_foot_link
+action_scale: 0.5
+actuator_stiffness: 30.0
+actuator_damping: 0.6

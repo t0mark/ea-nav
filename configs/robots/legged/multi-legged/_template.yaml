@@ -7,5 +7,7 @@ morphology_group: quadruped          # rewards.py의 보상 세트 선택 기준
 base_body_name: null                 # 몸통 링크 이름 (base contact 종료 조건, base mass 랜덤화, height scanner 부착점)
 foot_body_names: null                # 발 링크 이름 정규식 (contact sensor, feet_air_time 보상)
 undesired_contact_body_names: null   # 지면에 닿으면 안 되는 링크 정규식 (허벅지/무릎 등)
-action_scale: 0.5                    # 관절 위치 액션 스케일
+action_scale: 0.5                    # 관절 위치 액션 스케일 - 로봇 크기가 작을수록(go2 등) 낮춰야 함(0.25 등)
 default_joint_pos: {}                # 기본 자세 0이 리밋을 벗어나는 관절만 {관절 이름: 리밋 중앙값} (예: 무릎)
+actuator_stiffness: 25.0             # 관절 PD 게인 - usd authored 값은 안 믿고 effort 한계에서 역산 (usd_export_config.py 참고)
+actuator_damping: 0.5                # stiffness의 약 2%

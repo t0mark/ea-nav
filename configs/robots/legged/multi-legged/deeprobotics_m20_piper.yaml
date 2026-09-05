@@ -1,0 +1,8 @@
+usd_path: deeprobotics_m20_piper.usd
+morphology_group: quadruped
+base_body_name: base_link
+foot_body_names: fl_wheel|fr_wheel|hl_wheel|hr_wheel|link7|link8
+action_scale: 0.5
+undesired_contact_body_names: fl_knee|fr_knee|gripper_base|hl_knee|hr_knee
+actuator_stiffness: 76.4
+actuator_damping: 1.528

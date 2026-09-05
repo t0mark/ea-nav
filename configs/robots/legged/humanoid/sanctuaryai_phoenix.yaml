@@ -1,0 +1,7 @@
+usd_path: sanctuaryai_phoenix.usd
+morphology_group: humanoid
+base_body_name: root_link
+foot_body_names: ankle_abd_l_link|ankle_abd_r_link
+action_scale: 0.5
+actuator_stiffness: 200.0
+actuator_damping: 4.0

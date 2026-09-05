@@ -23,9 +23,15 @@ class LocoRunner(RobotController):
     관측·행동 적용까지 env.step()에 맡긴다.
     """
 
-    def __init__(self, category: str, robot_id: str, num_envs: int = 1, device: str = "cuda:0") -> None:
-        """robot_id의 env cfg를 조립하고, data/sim/policies/legged/{category}/{robot_id}/policy.pt를 로드한다."""
-        env_cfg = build_loco_rl_env_cfg(category, robot_id, num_envs=num_envs)
+    def __init__(
+        self, category: str, robot_id: str, num_envs: int = 1, device: str = "cuda:0", flat_terrain: bool = True
+    ) -> None:
+        """robot_id의 env cfg를 조립하고, data/sim/policies/legged/{category}/{robot_id}/policy.pt를 로드한다.
+
+        flat_terrain 기본값은 True다 - LocoRunner는 학습이 아니라 구동 확인/테스트용이고, 그 용도는
+        보통 wheeled와 동일한 조건(평지)에서 이동 명령 추종만 보는 것이라 지형 난이도가 필요 없다.
+        """
+        env_cfg = build_loco_rl_env_cfg(category, robot_id, num_envs=num_envs, flat_terrain=flat_terrain)
         env_cfg.sim.device = device
         self._env = ManagerBasedRLEnv(cfg=env_cfg)
 

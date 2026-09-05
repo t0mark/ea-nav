@@ -1,4 +1,4 @@
-usd_path: unitree_go2.usd
+usd_path: unitree_go1.usd
 morphology_group: quadruped
 base_body_name: base
 foot_body_names: FL_foot|FR_foot|RL_foot|RR_foot
@@ -17,5 +17,5 @@ default_joint_pos:
   RL_calf_joint: -1.5
   RR_calf_joint: -1.5
 undesired_contact_body_names: FL_calf|FR_calf|RL_calf|RR_calf
-actuator_stiffness: 23.7
-actuator_damping: 0.474
+actuator_stiffness: 25.0
+actuator_damping: 0.5

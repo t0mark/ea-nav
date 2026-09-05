@@ -1,0 +1,7 @@
+usd_path: unitree_h2.usd
+morphology_group: humanoid
+base_body_name: pelvis
+foot_body_names: left_ankle_pitch_link|right_ankle_pitch_link
+action_scale: 0.5
+actuator_stiffness: 360.0
+actuator_damping: 7.2

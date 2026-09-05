@@ -1,0 +1,7 @@
+usd_path: agibot_a2d.usd
+morphology_group: humanoid
+base_body_name: base_link
+foot_body_names: left_Left_Support_Link|left_Right_00_Link
+action_scale: 0.5
+actuator_stiffness: 60.0
+actuator_damping: 1.2

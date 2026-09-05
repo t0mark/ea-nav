@@ -1,7 +1,7 @@
-usd_path: unitree_g1.usd
+usd_path: robotera_star1.usd
 morphology_group: humanoid
-base_body_name: pelvis
+base_body_name: base_link
 foot_body_names: left_ankle_roll_link|right_ankle_roll_link
 action_scale: 0.5
-actuator_stiffness: 88.0
-actuator_damping: 1.76
+actuator_stiffness: 220.0
+actuator_damping: 4.4

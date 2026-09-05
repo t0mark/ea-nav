@@ -1,0 +1,7 @@
+usd_path: xiaopeng_px5.usd
+morphology_group: humanoid
+base_body_name: base_link
+foot_body_names: ll5_l|rl5_l
+action_scale: 0.5
+actuator_stiffness: 120.0
+actuator_damping: 2.4

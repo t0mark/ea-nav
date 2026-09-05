@@ -1,0 +1,7 @@
+usd_path: limx_tron2a_sf.usd
+morphology_group: humanoid
+base_body_name: base_Link
+foot_body_names: ankle_pitch_L_Link|ankle_pitch_R_Link
+action_scale: 0.5
+actuator_stiffness: 150.0
+actuator_damping: 3.0

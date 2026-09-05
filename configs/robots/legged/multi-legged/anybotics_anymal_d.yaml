@@ -1,0 +1,8 @@
+usd_path: anybotics_anymal_d.usd
+morphology_group: quadruped
+base_body_name: base
+foot_body_names: LF_SHANK|LH_SHANK|RF_SHANK|RH_SHANK|inspection_payload_tilt
+action_scale: 0.5
+undesired_contact_body_names: LF_THIGH|LH_THIGH|RF_THIGH|RH_THIGH|inspection_payload_pan
+actuator_stiffness: 80.0
+actuator_damping: 1.6

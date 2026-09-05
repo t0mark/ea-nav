@@ -1,0 +1,13 @@
+usd_path: unitree_aliengo.usd
+morphology_group: quadruped
+base_body_name: base
+foot_body_names: FL_calf|FR_calf|RL_calf|RR_calf
+action_scale: 0.5
+undesired_contact_body_names: FL_thigh|FR_thigh|RL_thigh|RR_thigh
+default_joint_pos:
+  FL_calf_joint: -97.99999
+  FR_calf_joint: -97.99999
+  RL_calf_joint: -97.99999
+  RR_calf_joint: -97.99999
+actuator_stiffness: 35.278
+actuator_damping: 0.7056

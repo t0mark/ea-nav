@@ -1,0 +1,7 @@
+usd_path: fourier_gr1.usd
+morphology_group: humanoid
+base_body_name: base
+foot_body_names: l_foot_roll|r_foot_roll
+action_scale: 0.5
+actuator_stiffness: 80.0
+actuator_damping: 1.6

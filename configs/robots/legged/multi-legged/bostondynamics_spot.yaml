@@ -1,0 +1,13 @@
+usd_path: bostondynamics_spot.usd
+morphology_group: quadruped
+base_body_name: body
+foot_body_names: fl_foot|fr_foot|hl_foot|hr_foot
+action_scale: 0.5
+undesired_contact_body_names: fl_lleg|fr_lleg|hl_lleg|hr_lleg
+default_joint_pos:
+  fl_kn: -87.08958
+  fr_kn: -87.08958
+  hl_kn: -87.08958
+  hr_kn: -87.08958
+actuator_stiffness: 45.0
+actuator_damping: 0.9

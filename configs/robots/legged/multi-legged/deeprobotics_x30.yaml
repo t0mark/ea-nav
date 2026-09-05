@@ -1,0 +1,13 @@
+usd_path: deeprobotics_x30.usd
+morphology_group: quadruped
+base_body_name: TORSO
+foot_body_names: FL_FOOT|FR_FOOT|HL_FOOT|HR_FOOT
+action_scale: 0.5
+undesired_contact_body_names: FL_SHANK|FR_SHANK|HL_SHANK|HR_SHANK
+default_joint_pos:
+  FL_Knee_joint: 82.50592
+  FR_Knee_joint: 82.50592
+  HL_Knee_joint: 82.50592
+  HR_Knee_joint: 82.50592
+actuator_stiffness: 84.0
+actuator_damping: 1.68

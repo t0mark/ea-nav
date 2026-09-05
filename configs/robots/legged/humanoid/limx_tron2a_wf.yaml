@@ -1,0 +1,7 @@
+usd_path: limx_tron2a_wf.usd
+morphology_group: humanoid
+base_body_name: base_Link
+foot_body_names: wheel_L_Link|wheel_R_Link
+action_scale: 0.5
+actuator_stiffness: 150.0
+actuator_damping: 3.0

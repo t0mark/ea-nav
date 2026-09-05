@@ -27,6 +27,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns
+from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
@@ -51,6 +52,12 @@ class LeggedRobotCfg:
     action_scale: float = 0.5
     undesired_contact_body_names: str | None = None
     default_joint_pos: dict[str, float] = field(default_factory=dict)
+    # USD에 authored된 PD 게인은 URDF->USD 변환기가 넣은 "정지 유지용" 기본값이라 RL 학습에 못 쓴다
+    # (관측됨: unitree_go2 - stiffness 1e7, damping 1e5, 공식 값(25, 0.5)의 40만 배) - 그래서
+    # ImplicitActuatorCfg에 usd 값을 그대로 안 쓰고, usd_export_config.py가 관절 effort 한계에서
+    # 계산한 값을 쓴다. 여기 25.0/0.5는 그 계산이 없을 때(구버전 config)의 안전한 기본값이다.
+    actuator_stiffness: float = 25.0
+    actuator_damping: float = 0.5
 
 
 def load_legged_robot_cfg(category: str, robot_id: str) -> LeggedRobotCfg:
@@ -66,6 +73,8 @@ def load_legged_robot_cfg(category: str, robot_id: str) -> LeggedRobotCfg:
         action_scale=raw.get("action_scale", 0.5),
         undesired_contact_body_names=raw.get("undesired_contact_body_names"),
         default_joint_pos=raw.get("default_joint_pos") or {},
+        actuator_stiffness=raw.get("actuator_stiffness", 25.0),
+        actuator_damping=raw.get("actuator_damping", 0.5),
     )
 
 
@@ -267,11 +276,20 @@ class LocoRLEnvCfg(ManagerBasedRLEnvCfg):
             self.scene.terrain.terrain_generator.curriculum = False
 
 
-def build_loco_rl_env_cfg(category: str, robot_id: str, num_envs: int = 4096) -> LocoRLEnvCfg:
+def build_loco_rl_env_cfg(
+    category: str, robot_id: str, num_envs: int = 4096, flat_terrain: bool = False
+) -> LocoRLEnvCfg:
     """robot_id 하나에 대해 완전히 조립된 LocoRLEnvCfg를 만든다 - tools/03_controller_rl.py의 유일한 진입점.
 
-    관절 드라이브 게인은 URDF -> USD 변환 시 이미 USD에 반영돼 있으므로(scripts/sim/env/robot.py와
-    동일한 전제), 여기서도 모든 관절에 ImplicitActuatorCfg로 USD 값을 그대로 쓴다.
+    관절 PD 게인은 USD authored 값을 쓰지 않는다 - URDF->USD 변환기가 넣은 값은 정지 자세를 딱딱하게
+    붙잡아두기 위한 것이라 RL 학습에 맞지 않을 정도로 크다(관측됨: unitree_go2 stiffness 1e7). 대신
+    usd_export_config.py가 관절 effort 한계에서 계산해 config에 저장해 둔 값(robot_cfg의
+    actuator_stiffness/damping)을 쓴다.
+
+    flat_terrain=True면 계단·경사 커리큘럼 지형 대신 평지로 바꾼다 - tools/04_controller_test.py의
+    기본 경로 추종 테스트(ㄱ자 웨이포인트)는 "정책이 이동 명령을 따라가는가"만 wheeled와 동일한
+    조건(평지)으로 확인하는 게 목적이고, 지형 난이도 자체는 학습 커리큘럼에서 이미 검증되므로
+    여기서 또 볼 필요가 없다.
     """
     robot_cfg = load_legged_robot_cfg(category, robot_id)
     usd_path = _USD_ROOT / category / robot_cfg.usd_path
@@ -284,23 +302,70 @@ def build_loco_rl_env_cfg(category: str, robot_id: str, num_envs: int = 4096) ->
     # 공용 골격 위에 이 로봇의 USD·본체 이름·발 이름을 채워 넣는다
     env_cfg = LocoRLEnvCfg()
     env_cfg.scene.num_envs = num_envs
+    # 다리 관절이 서로 스치는 접촉을 물리적으로 정확히 풀어내려면 velocity iteration이 더 필요하다
+    # (관측됨: 기본값으로 두면 "more than 4 velocity iterations" TGS 경고가 뜸) - Isaac Lab 공식
+    # 사족보행/휴머노이드 에셋(A1·Go2·ANYmal·H1·G1)이 전부 쓰는 값을 그대로 따른다
+    solver_velocity_iterations = 4 if robot_cfg.morphology_group == "humanoid" else 0
     env_cfg.scene.robot = ArticulationCfg(
         prim_path="{ENV_REGEX_NS}/Robot",
         # activate_contact_sensors=True 필수 - scene.contact_forces(ContactSensor)가 이 로봇의
         # 몸체에서 접촉을 읽으려면 스폰 시점에 PhysX 접촉 리포터가 켜져 있어야 한다
-        spawn=sim_utils.UsdFileCfg(usd_path=str(usd_path), activate_contact_sensors=True),
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=str(usd_path),
+            activate_contact_sensors=True,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=False,
+                retain_accelerations=False,
+                linear_damping=0.0,
+                angular_damping=0.0,
+                max_linear_velocity=1000.0,
+                max_angular_velocity=1000.0,
+                max_depenetration_velocity=1.0,
+            ),
+            articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+                enabled_self_collisions=False,
+                solver_position_iteration_count=4,
+                solver_velocity_iteration_count=solver_velocity_iterations,
+            ),
+        ),
         # 관절 기본 자세는 0을 기본으로 쓰되, 그게 리밋을 벗어나는 관절(예: 무릎)만 config의
         # default_joint_pos(usd_export_config.py가 usd 리밋에서 미리 계산해 둔 값)로 덮어쓴다 -
         # 안 그러면 ArticulationCfg 검증 단계에서 "기본 자세가 리밋 밖" 예외가 바로 난다
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0.0, 0.0, spawn_height), joint_pos=_build_joint_pos_cfg(robot_cfg.default_joint_pos)
         ),
-        actuators={"all_joints": ImplicitActuatorCfg(joint_names_expr=[".*"], stiffness=None, damping=None)},
+        # 리밋 끝까지 밀어붙이면 PPO가 물리적 하드 리밋에 부딪혀 불안정해지므로 10% 여유를 둔다
+        # (A1/Go2/H1/G1 공식 설정과 동일)
+        soft_joint_pos_limit_factor=0.9,
+        actuators={
+            "all_joints": ImplicitActuatorCfg(
+                joint_names_expr=[".*"],
+                stiffness=robot_cfg.actuator_stiffness,
+                damping=robot_cfg.actuator_damping,
+            )
+        },
     )
     env_cfg.scene.height_scanner.prim_path = f"{{ENV_REGEX_NS}}/Robot/{robot_cfg.base_body_name}"
     env_cfg.actions.joint_pos.scale = robot_cfg.action_scale
     env_cfg.events.add_base_mass.params["asset_cfg"].body_names = robot_cfg.base_body_name
     env_cfg.terminations.base_contact.params["sensor_cfg"].body_names = robot_cfg.base_body_name
+
+    if flat_terrain:
+        env_cfg.scene.terrain = TerrainImporterCfg(
+            prim_path="/World/ground",
+            terrain_type="plane",
+            collision_group=-1,
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                friction_combine_mode="multiply",
+                restitution_combine_mode="multiply",
+                static_friction=1.0,
+                dynamic_friction=1.0,
+            ),
+            debug_vis=False,
+        )
+        # 평지는 난이도 단계가 없어 지형 커리큘럼 자체가 의미 없다 - 켜둔 채로 두면 이 항목이
+        # 참조하는 terrain_generator가 None이라 그대로 에러가 난다
+        env_cfg.curriculum.terrain_levels = None
 
     # 형태 그룹(quadruped/humanoid)에 맞는 보상 세트를 고르고, 로봇별 발/접촉 링크 이름을 채운다
     if robot_cfg.morphology_group == "humanoid":

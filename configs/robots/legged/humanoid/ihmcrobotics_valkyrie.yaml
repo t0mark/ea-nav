@@ -1,0 +1,7 @@
+usd_path: ihmcrobotics_valkyrie.usd
+morphology_group: humanoid
+base_body_name: pelvis
+foot_body_names: leftFoot|rightFoot
+action_scale: 0.5
+actuator_stiffness: 350.0
+actuator_damping: 7.0

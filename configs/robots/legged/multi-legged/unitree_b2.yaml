@@ -1,0 +1,13 @@
+usd_path: unitree_b2.usd
+morphology_group: quadruped
+base_body_name: base_link
+foot_body_names: FL_foot|FL_thigh_protect|FR_foot|FR_thigh_protect|RL_foot|RL_thigh_protect|RR_foot|RR_thigh_protect
+action_scale: 0.5
+undesired_contact_body_names: FL_calf|FL_thigh|FR_calf|FR_thigh|RL_calf|RL_thigh|RR_calf|RR_thigh
+default_joint_pos:
+  FL_calf_joint: -93.10563
+  FR_calf_joint: -93.10563
+  RL_calf_joint: -93.10563
+  RR_calf_joint: -93.10563
+actuator_stiffness: 200.0
+actuator_damping: 4.0
