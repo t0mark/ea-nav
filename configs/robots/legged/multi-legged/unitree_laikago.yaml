@@ -1,13 +1,68 @@
+# Laikago 전용 PPO velocity-tracking 학습 리포는 없다(unitree_rl_gym/legged_gym/HIMLoco/
+# DeepRoboticsLab 등 재확인, 흔적 없음) - 있는 건 erwincoumans/motion_imitation(Google Research,
+# 모션캡처 리타겟 모방학습) 뿐이라 reward/알고리즘은 대조 불가능하지만, laikago.py/
+# laikago_constants.py의 실제 하드웨어 PD 게인(ABDUCTION_P/D_GAIN, HIP_P/D_GAIN, KNEE_P/D_GAIN)은
+# 재클론해 확인한 실측치라 반영했다 - stiffness는 관절 전부 220으로 균일하지만 damping은 hip_joint
+# (abduction)만 0.3이고 thigh/calf(hip flexion/knee)는 2.0으로 갈린다.
 usd_path: unitree_laikago.usd
-morphology_group: quadruped
 base_body_name: trunk
 foot_body_names: FL_calf|FR_calf|RL_calf|RR_calf
-action_scale: 0.5
 undesired_contact_body_names: FL_thigh|FR_thigh|RL_thigh|RR_thigh
+actuator:
+  type: grouped
+  groups:
+  - pattern: .*_hip_joint
+    stiffness: 220.0
+    damping: 0.3
+  - pattern: .*_thigh_joint|.*_calf_joint
+    stiffness: 220.0
+    damping: 2.0
+action:
+  type: position_only
+  scale: 0.5
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 0.5
+- name: lin_vel_z_l2
+  weight: -2.0
+- name: ang_vel_xy_l2
+  weight: -0.05
+- name: dof_torques_l2
+  weight: -1.0e-05
+- name: dof_acc_l2
+  weight: -2.5e-07
+- name: action_rate_l2
+  weight: -0.01
+- name: flat_orientation_l2
+  weight: -1.0
+- name: dof_pos_limits
+  weight: -1.0
+- name: feet_air_time_multi
+  weight: 0.125
+  params:
+    threshold: 0.5
+- name: undesired_contacts
+  weight: -1.0
+  params:
+    threshold: 1.0
 default_joint_pos:
   FL_calf_joint: -96.99999
   FR_calf_joint: -96.99999
   RL_calf_joint: -96.99999
   RR_calf_joint: -96.99999
-actuator_stiffness: 55.0
-actuator_damping: 1.1
+termination:
+- contact
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization: basic
+agent:
+  num_envs: 4096
+  max_iterations: 1500
+  learning_rate: 0.001
+  entropy_coef: 0.01
+  hidden_dims:
+  - 512
+  - 256
+  - 128

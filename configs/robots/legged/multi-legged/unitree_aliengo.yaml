@@ -1,13 +1,46 @@
+# InternRobotics/HIMLoco 공식 리포(legged_gym/envs/aliengo/aliengo_config.py)를 재클론해 재검증
+# 후 반영했다(전용 IsaacLab 포트는 없어 이 legged_gym 리포가 최선의 근거). joint_power·
+# foot_clearance·smoothness는 이 리포 전용 커스텀 보상이라 뺐다. torques/dof_pos_limits/
+# feet_air_time/collision은 원본 자체가 weight 0(비활성)이라 우리도 뺐다.
 usd_path: unitree_aliengo.usd
-morphology_group: quadruped
 base_body_name: base
-foot_body_names: FL_calf|FR_calf|RL_calf|RR_calf
-action_scale: 0.5
-undesired_contact_body_names: FL_thigh|FR_thigh|RL_thigh|RR_thigh
-default_joint_pos:
-  FL_calf_joint: -97.99999
-  FR_calf_joint: -97.99999
-  RL_calf_joint: -97.99999
-  RR_calf_joint: -97.99999
-actuator_stiffness: 35.278
-actuator_damping: 0.7056
+foot_body_names: FL_foot|FR_foot|RL_foot|RR_foot
+# undesired_contact_body_names 없음 - 원본의 penalize_contacts_on(thigh/calf/base)은 실제 weight가
+# 0(비활성)이라 undesired_contacts 보상 자체를 안 쓴다.
+actuator:
+  type: simple
+  stiffness: 40.0
+  damping: 2.0
+action:
+  type: position_only
+  scale: 0.5
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 0.5
+- name: lin_vel_z_l2
+  weight: -2.0
+- name: ang_vel_xy_l2
+  weight: -0.05
+- name: flat_orientation_l2
+  weight: -0.2
+- name: dof_acc_l2
+  weight: -2.5e-07
+- name: action_rate_l2
+  weight: -0.01
+- name: base_height_l2
+  weight: -1.0
+  params:
+    target_height: 0.30
+termination:
+- contact
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization: basic
+agent:
+  num_envs: 4096
+  max_iterations: 1500
+  learning_rate: 0.001
+  entropy_coef: 0.01
+  hidden_dims: [512, 256, 128]

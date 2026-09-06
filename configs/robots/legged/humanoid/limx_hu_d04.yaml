@@ -1,7 +1,86 @@
+# LimX Dynamics 공식 리포(limxdynamics/humanoid-rl-isaaclab, assets/config/HU_D04_01.py +
+# tasks/locomotion/robots/oli/31dof/velocity_env_cfg.py)를 재클론해 재검증 후 반영했다. actuator는
+# 실제 공식 값(armature*자연진동수^2 공식으로 역산된 stiffness/damping)을 관절군 4개로 그대로
+# 옮겼다. gait(위상 기반)·feet_clearance·body_ang_vel/orientation/lin_acc(몸통 전용 함수)·
+# joint_position_normalization_amp·applied_torque_limits는 이 리포 전용 커스텀 함수라 뺐다.
+# feet_air_time_biped/feet_slide/undesired_contacts의 접촉 센서 대상은 원본이 ".*ankle_roll.*"를
+# 쓰지만, 우리는 foot_body_names(contact_foot_tip_L/R - 우리 usd에서 자동 추출된 실제 발끝 링크)를
+# 그대로 쓴다 - 원본과 다른 링크지만, 우리 usd 구조에서 추출된 값을 신뢰하는 쪽을 택했다.
 usd_path: limx_hu_d04.usd
-morphology_group: humanoid
 base_body_name: base_link
 foot_body_names: contact_foot_tip_L|contact_foot_tip_R
-action_scale: 0.5
-actuator_stiffness: 140.0
-actuator_damping: 2.8
+undesired_contact_body_names: (?!.*ankle.*).*
+actuator:
+  type: grouped
+  groups:
+  - pattern: .*_hip_pitch_joint|.*_hip_roll_joint|.*_hip_yaw_joint|.*_knee_joint
+    stiffness: 139.4
+    damping: 17.75
+  - pattern: .*_ankle_pitch_joint|.*_ankle_roll_joint|waist_yaw_joint|waist_roll_joint|waist_pitch_joint
+    stiffness: 93.6
+    damping: 11.93
+  - pattern: head_pitch_joint|head_yaw_joint|.*_wrist_yaw_joint|.*_wrist_pitch_joint|.*_wrist_roll_joint
+    stiffness: 15.1
+    damping: 1.93
+  - pattern: .*_shoulder_pitch_joint|.*_shoulder_roll_joint|.*_shoulder_yaw_joint|.*_elbow_joint
+    stiffness: 87.5
+    damping: 11.14
+action:
+  type: position_only
+  scale:
+    .*hip_pitch.*: 0.2511
+    .*hip_roll.*: 0.2511
+    .*hip_yaw.*: 0.2511
+    .*knee.*: 0.2511
+    .*ankle.*: 0.1121
+    .*waist.*: 0.1121
+    .*head.*: 0.3141
+    .*shoulder_pitch.*: 0.12
+    .*shoulder_roll.*: 0.12
+    .*shoulder_yaw.*: 0.12
+    .*elbow.*: 0.12
+    .*wrist.*: 0.3141
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 2.0
+- name: track_ang_vel_z_exp
+  weight: 2.0
+- name: feet_air_time_biped
+  weight: 0.5
+  params:
+    threshold: 0.5
+- name: feet_slide
+  weight: -0.1
+- name: undesired_contacts
+  weight: -10.0
+  params:
+    threshold: 1.0
+- name: alive
+  weight: 1.0
+- name: termination_penalty
+  weight: -1.0
+- name: dof_acc_l2
+  weight: -5.0e-07
+- name: dof_vel_l2
+  weight: -7.5e-04
+- name: dof_torques_l2
+  weight: -3.0e-07
+- name: dof_pos_limits
+  weight: -1.0
+- name: action_rate_l2
+  weight: -5.0e-03
+termination:
+- contact
+- name: orientation
+  limit_angle: 1.3
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization: basic
+agent:
+  num_envs: 4096
+  num_steps_per_env: 32
+  max_iterations: 40000
+  learning_rate: 5.0e-05
+  entropy_coef: 0.01
+  num_learning_epochs: 10
+  hidden_dims: [512, 256, 128]

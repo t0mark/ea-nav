@@ -1,7 +1,84 @@
+# Unitree 공식 리포(unitreerobotics/unitree_rl_gym, legged_gym) 세팅을 다리만 RL 액션에 넣고
+# (팔/허리는 고정 PD로 자세만 유지) LSTM 재귀 정책을 쓰는 구조까지 그대로 이식했다. 다만 actuator
+# stiffness/damping 수치는 legged_gym의 h1_config.py 값(hip 150/2, knee 200/4, ankle 40/2, torso
+# 300/6, shoulder 150/2, elbow 100/2)이 아니라 isaac-sim/IsaacLab의
+# isaaclab_assets/robots/unitree.py H1_CFG 값을 재클론해 대조한 결과와 정확히 일치한다 -
+# 재검증 결과 반영: 이 수치는 legged_gym이 아니라 IsaacLab 출처다.
 usd_path: unitree_h1.usd
-morphology_group: humanoid
 base_body_name: pelvis
 foot_body_names: left_ankle_link|right_ankle_link
-action_scale: 0.5
-actuator_stiffness: 200.0
-actuator_damping: 4.0
+undesired_contact_body_names: .*_hip.*|.*_knee
+actuator:
+  type: grouped
+  groups:
+  - pattern: .*_hip_yaw|.*_hip_roll
+    stiffness: 150.0
+    damping: 5.0
+  - pattern: .*_hip_pitch|.*_knee|torso
+    stiffness: 200.0
+    damping: 5.0
+  - pattern: .*_ankle
+    stiffness: 20.0
+    damping: 4.0
+  - pattern: .*_shoulder_.*|.*_elbow
+    stiffness: 40.0
+    damping: 10.0
+action:
+  type: position_only
+  joint_names: .*_hip_yaw|.*_hip_roll|.*_hip_pitch|.*_knee|.*_ankle
+  scale: 0.25
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 0.5
+- name: lin_vel_z_l2
+  weight: -2.0
+- name: ang_vel_xy_l2
+  weight: -0.05
+- name: flat_orientation_l2
+  weight: -1.0
+- name: base_height_l2
+  weight: -10.0
+  params:
+    target_height: 1.05
+- name: dof_acc_l2
+  weight: -2.5e-07
+- name: undesired_contacts
+  weight: -1.0
+- name: action_rate_l2
+  weight: -0.01
+- name: dof_pos_limits
+  weight: -5.0
+- name: alive
+  weight: 0.15
+- name: joint_deviation_l1
+  weight: -1.0
+  params:
+    joint_names:
+    - .*_hip_yaw
+    - .*_hip_roll
+- name: feet_slide
+  weight: -0.2
+- name: feet_swing_height
+  weight: -20.0
+- name: feet_contact
+  weight: 0.18
+termination:
+- contact
+policy_architecture: recurrent
+algorithm: ppo
+domain_randomization:
+  type: extended
+  reset_joint_position_range: [1.0, 1.0]
+  mass_distribution_params: [-1.0, 3.0]
+agent:
+  num_envs: 4096
+  max_iterations: 10000
+  learning_rate: 0.001
+  entropy_coef: 0.01
+  init_noise_std: 0.8
+  hidden_dims: [32]
+  rnn_type: lstm
+  rnn_hidden_dim: 64
+  rnn_num_layers: 1

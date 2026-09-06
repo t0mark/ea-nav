@@ -1,7 +1,76 @@
+# Fourier GR1 공식 학습 리포(zixuan417/smooth-humanoid-locomotion, legged_gym/envs/gr1/
+# gr1_walk_phase_config.py)를 재클론해 재검증 후 actuator 게인·action_scale·max_iterations만
+# 반영했다. 이 로봇의 정책은 ActorCriticRMA(특권 관측+10-step 히스토리 인코딩)이고 보상은 위상
+# 기반(phase-based) gait reward 세트(joint_pos/feet_clearance/feet_contact_number/knee_distance
+# 등 20개 이상)라 우리 mlp/ppo·rewards 레지스트리와 구조 자체가 다르다 - 정확한 weight를 확인 못한
+# 채 보상 세트를 추측으로 바꾸는 것보다, 검증된 PD·액션·max_iterations만 반영하고 보상은 일반
+# humanoid 기본값을 유지하는 쪽이 낫다고 판단했다.
 usd_path: fourier_gr1.usd
-morphology_group: humanoid
 base_body_name: base
 foot_body_names: l_foot_roll|r_foot_roll
-action_scale: 0.5
-actuator_stiffness: 80.0
-actuator_damping: 1.6
+actuator:
+  type: grouped
+  groups:
+  - pattern: .*hip_roll
+    stiffness: 251.625
+    damping: 14.72
+  - pattern: .*hip_yaw|waist_yaw|waist_pitch|waist_roll
+    stiffness: 362.52
+    damping: 10.08
+  - pattern: .*hip_pitch|.*knee_pitch
+    stiffness: 200.0
+    damping: 11.0
+  - pattern: .*ankle_pitch
+    stiffness: 10.98
+    damping: 0.60
+  - pattern: .*ankle_roll
+    stiffness: 0.0
+    damping: 0.1
+  - pattern: head_yaw|head_pitch|head_roll
+    stiffness: 10.0
+    damping: 1.0
+  - pattern: .*shoulder_pitch|.*shoulder_roll|.*shoulder_yaw|.*elbow_pitch
+    stiffness: 40.0
+    damping: 2.0
+  - pattern: .*wrist_yaw|.*wrist_roll|.*wrist_pitch
+    stiffness: 10.0
+    damping: 1.0
+action:
+  type: position_only
+  scale: 0.5
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 0.5
+- name: ang_vel_xy_l2
+  weight: -0.05
+- name: dof_torques_l2
+  weight: -1.0e-05
+- name: dof_acc_l2
+  weight: -2.5e-07
+- name: action_rate_l2
+  weight: -0.01
+- name: flat_orientation_l2
+  weight: -1.0
+- name: dof_pos_limits
+  weight: -1.0
+- name: termination_penalty
+  weight: -200.0
+- name: feet_air_time_biped
+  weight: 0.25
+  params:
+    threshold: 0.4
+- name: feet_slide
+  weight: -0.25
+termination:
+- contact
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization: basic
+agent:
+  num_envs: 4096
+  max_iterations: 12002
+  learning_rate: 0.001
+  entropy_coef: 0.01
+  hidden_dims: [512, 256, 128]

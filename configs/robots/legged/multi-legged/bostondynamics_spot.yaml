@@ -1,13 +1,61 @@
+# Spot 공식(IsaacLab SpotFlatEnvCfg)은 height_scan 없는 커스텀 flat 지형 + 지연·비선형 액추에이터
+# (DelayedPD/RemotizedPD) + spot_mdp.py 전용 보상 13종을 쓴다 - 전부 우리 골격(rough 커리큘럼 +
+# height_scan 필수 + 단순 PD 액추에이터)과 구조 자체가 달라 "근사"가 아니라 재현이 안 된다.
+# 그래서 질량·크기가 가장 비슷한 4족보행인 ANYmal의 레시피로 대체했다 - ANYmal 공식도 우리가 재현
+# 못하는 것(학습된 LSTM 액추에이터망)을 갖고 있어서, 우리 파이프라인에서는 이미 simple PD + Isaac Lab
+# 기본 보상 세트(오버라이드 없음) 그대로 쓰고 있다. 그 레시피를 그대로 가져오되, 액추에이터
+# stiffness/damping과 action_scale만 Spot 공식 파일에서 실측 확인한 값(60.0/1.5, 0.2)으로 바꿨다.
 usd_path: bostondynamics_spot.usd
-morphology_group: quadruped
 base_body_name: body
 foot_body_names: fl_foot|fr_foot|hl_foot|hr_foot
-action_scale: 0.5
 undesired_contact_body_names: fl_lleg|fr_lleg|hl_lleg|hr_lleg
+actuator:
+  type: simple
+  stiffness: 60.0
+  damping: 1.5
+action:
+  type: position_only
+  scale: 0.2
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 0.5
+- name: lin_vel_z_l2
+  weight: -2.0
+- name: ang_vel_xy_l2
+  weight: -0.05
+- name: dof_torques_l2
+  weight: -1.0e-05
+- name: dof_acc_l2
+  weight: -2.5e-07
+- name: action_rate_l2
+  weight: -0.01
+- name: flat_orientation_l2
+  weight: -1.0
+- name: dof_pos_limits
+  weight: -1.0
+- name: feet_air_time_multi
+  weight: 0.125
+  params:
+    threshold: 0.5
+- name: undesired_contacts
+  weight: -1.0
+  params:
+    threshold: 1.0
 default_joint_pos:
   fl_kn: -87.08958
   fr_kn: -87.08958
   hl_kn: -87.08958
   hr_kn: -87.08958
-actuator_stiffness: 45.0
-actuator_damping: 0.9
+termination:
+- contact
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization: basic
+agent:
+  num_envs: 4096
+  max_iterations: 1500
+  learning_rate: 0.001
+  entropy_coef: 0.005
+  hidden_dims: [512, 256, 128]

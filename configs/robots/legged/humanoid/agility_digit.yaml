@@ -1,7 +1,99 @@
+# Isaac Lab 공식 digit/rough_env_cfg.py 세팅을 그대로 이식했다(재검증: 실제 소스 재클론해 확인).
+# Digit은 다리에 닫힌 루프(로드 구속) 구조가 있어 관절 초기 자세를 무작위로 벌리면 그 루프가
+# 물리적으로 깨질 수 있다("Don't randomize the initial joint positions because we have closed
+# loops" - Isaac Lab 원본 주석) - 그래서 domain_randomization.reset_joint_position_range를
+# (1.0, 1.0)으로 고정한다. 액션과 액추에이터 둘 다 로드 구속 관절(rod/tarsus)을 제외한 다리+팔
+# 관절로만 제한한다 - 원본이 "전 관절(.*)에 액추에이터를 걸면 닫힌 루프 때문에 joint_pos 텐서
+# 길이가 안 맞아 인덱싱이 깨진다"고 명시 경고하는 부분(actuators/simple.py의 joint_names로 반영).
+# 다만 원본은 이 관절들의 stiffness/damping을 None(USD authored 값 그대로 신뢰)으로 두는데, 우리
+# Digit usd의 authored PD 게인이 신뢰할 만한지 확인할 방법이 없어(다른 로봇들과 같은 이유로) 기존
+# 폴백 값(25.0/0.5)을 그대로 쓴다 - 이 부분만 원본과 다르다.
 usd_path: agility_digit.usd
-morphology_group: humanoid
 base_body_name: torso_base
 foot_body_names: left_leg_toe_roll|right_leg_toe_roll
-action_scale: 0.5
-actuator_stiffness: 25.0
-actuator_damping: 0.5
+undesired_contact_body_names: .*_rod|.*_tarsus
+actuator:
+  type: simple
+  joint_names: .*_hip_roll|.*_hip_yaw|.*_hip_pitch|.*_knee|.*_toe_a|.*_toe_b|.*_arm_.*
+  stiffness: 25.0
+  damping: 0.5
+action:
+  type: position_only
+  joint_names: .*_hip_roll|.*_hip_yaw|.*_hip_pitch|.*_knee|.*_toe_a|.*_toe_b|.*_arm_.*
+  scale: 0.5
+rewards:
+- name: termination_penalty
+  weight: -100.0
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 1.0
+- name: feet_air_time_biped
+  weight: 0.25
+  params:
+    threshold: 0.8
+- name: feet_slide
+  weight: -0.25
+- name: no_jumps
+  weight: -0.5
+- name: dof_torques_l2
+  weight: -1.0e-06
+- name: dof_acc_l2
+  weight: -2.0e-07
+  params:
+    joint_names: .*_hip_roll|.*_hip_yaw|.*_hip_pitch|.*_knee|.*_toe_a|.*_toe_b|.*_arm_.*
+- name: action_rate_l2
+  weight: -0.008
+- name: flat_orientation_l2
+  weight: -2.5
+- name: stand_still
+  weight: -0.4
+  params:
+    joint_names: .*_hip_roll|.*_hip_yaw|.*_hip_pitch|.*_knee|.*_toe_a|.*_toe_b
+- name: lin_vel_z_l2
+  weight: -2.0
+- name: ang_vel_xy_l2
+  weight: -0.1
+- name: dof_pos_limits
+  weight: -1.0
+  params:
+    joint_names: .*_leg_toe_roll|.*_leg_toe_pitch|.*_tarsus
+- name: joint_deviation_l1
+  weight: -0.1
+  params:
+    joint_names: .*_leg_hip_roll
+- name: joint_deviation_l1
+  weight: -0.2
+  params:
+    joint_names: .*_leg_hip_yaw
+- name: joint_deviation_l1
+  weight: -0.2
+  params:
+    joint_names: .*_tarsus
+- name: joint_deviation_l1
+  weight: -0.1
+  params:
+    joint_names:
+    - .*_toe_a
+    - .*_toe_b
+- name: joint_deviation_l1
+  weight: -0.2
+  params:
+    joint_names: .*_arm_.*
+- name: undesired_contacts
+  weight: -0.1
+termination:
+- contact
+- name: orientation
+  limit_angle: 0.7
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization:
+  type: basic
+  reset_joint_position_range: [1.0, 1.0]
+agent:
+  num_envs: 4096
+  max_iterations: 3000
+  learning_rate: 0.001
+  entropy_coef: 0.01
+  hidden_dims: [512, 256, 128]

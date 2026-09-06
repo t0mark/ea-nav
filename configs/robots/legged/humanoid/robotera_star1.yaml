@@ -1,7 +1,65 @@
+# RobotEra 공식 리포(roboterax/humanoid-gym, XBotL 기준)를 재클론해 재검증 후 PD 게인·action_scale·
+# PPO 하이퍼파라미터까지 반영했다. 15프레임 관측 스태킹·비대칭 actor/critic·exp 커널 보상(joint_pos/
+# feet_clearance/feet_contact_number 등)은 관측 축 자체가 없어 재현하지 못했다 - 정확한 weight를
+# 확인 못한 채 보상 세트를 추측으로 바꾸는 것보다, 검증된 PD·액션·PPO만 반영하고 보상은 일반
+# humanoid 기본값을 유지하는 쪽이 낫다고 판단했다. critic_hidden_dims는 원본이 [768,256,128]로
+# actor([512,256,128])와 비대칭인데, 우리 정책 축은 actor/critic이 항상 같은 hidden_dims라 이
+# 비대칭은 반영 못 했다(actor 쪽 값을 그대로 씀).
 usd_path: robotera_star1.usd
-morphology_group: humanoid
 base_body_name: base_link
 foot_body_names: left_ankle_roll_link|right_ankle_roll_link
-action_scale: 0.5
-actuator_stiffness: 220.0
-actuator_damping: 4.4
+actuator:
+  type: grouped
+  groups:
+  - pattern: .*_leg_roll_joint|.*_leg_yaw_joint
+    stiffness: 200.0
+    damping: 10.0
+  - pattern: .*_leg_pitch_joint|.*_knee_joint
+    stiffness: 350.0
+    damping: 10.0
+  - pattern: .*_ankle_pitch_joint|.*_ankle_roll_joint
+    stiffness: 15.0
+    damping: 10.0
+action:
+  type: position_only
+  joint_names: .*_leg_roll_joint|.*_leg_yaw_joint|.*_leg_pitch_joint|.*_knee_joint|.*_ankle_pitch_joint|.*_ankle_roll_joint
+  scale: 0.25
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 0.5
+- name: ang_vel_xy_l2
+  weight: -0.05
+- name: dof_torques_l2
+  weight: -1.0e-05
+- name: dof_acc_l2
+  weight: -2.5e-07
+- name: action_rate_l2
+  weight: -0.01
+- name: flat_orientation_l2
+  weight: -1.0
+- name: dof_pos_limits
+  weight: -1.0
+- name: termination_penalty
+  weight: -200.0
+- name: feet_air_time_biped
+  weight: 0.25
+  params:
+    threshold: 0.4
+- name: feet_slide
+  weight: -0.25
+termination:
+- contact
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization: basic
+agent:
+  num_envs: 4096
+  max_iterations: 3000
+  learning_rate: 1.0e-05
+  entropy_coef: 0.001
+  gamma: 0.994
+  lam: 0.9
+  num_learning_epochs: 2
+  hidden_dims: [512, 256, 128]

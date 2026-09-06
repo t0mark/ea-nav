@@ -1,8 +1,85 @@
+# DeepRobotics 공식 리포(DeepRoboticsLab/rl_training) M20 rough_env_cfg.py + assets/deeprobotics.py
+# 세팅을 재클론해 재검증 후 반영했다. 회전 보행 전용 보상(rotation_gait_status/symmetry)·조건부
+# hipy/knee 페널티·bad_orientation_penalty(-1000, reward로 처리)는 이 리포 전용 커스텀 함수라 뺐다
+# (대신 orientation 종료조건으로 급격한 전도는 잡는다 - 정확한 임계각은 원본에 없어 digit과 같은
+# 0.7rad을 그대로 씀). 원본은 illegal_contact 종료조건 자체를 꺼두지만(전도는 보상 페널티로만
+# 처리), 우리는 orientation 종료조건 하나만 켜서 대체한다.
 usd_path: deeprobotics_m20.usd
-morphology_group: quadruped
 base_body_name: base_link
 foot_body_names: fl_wheel|fr_wheel|hl_wheel|hr_wheel
-action_scale: 0.5
 undesired_contact_body_names: fl_knee|fr_knee|hl_knee|hr_knee
-actuator_stiffness: 76.4
-actuator_damping: 1.528
+actuator:
+  type: grouped
+  groups:
+  - pattern: .*hipx_joint|.*hipy_joint|.*knee_joint
+    stiffness: 80.0
+    damping: 2.0
+  - pattern: .*_wheel_joint
+    stiffness: 0.0
+    damping: 0.6
+action:
+  type: position_velocity_mixed
+  position_joints:
+    pattern: .*hipx_joint|.*hipy_joint|.*knee_joint
+    scale: {".*hipx_joint": 0.125, "^(?!.*hipx_joint).*$": 0.25}
+  velocity_joints:
+    pattern: .*_wheel_joint
+    scale: 5.0
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 5.0
+- name: track_ang_vel_z_exp
+  weight: 3.0
+- name: lin_vel_z_l2
+  weight: -2.0
+- name: ang_vel_xy_l2
+  weight: -0.02
+- name: dof_torques_l2
+  weight: -2.5e-05
+  params:
+    joint_names: .*hipx_joint|.*hipy_joint|.*knee_joint
+- name: dof_acc_l2
+  weight: -2.0e-07
+  params:
+    joint_names: .*hipx_joint|.*hipy_joint|.*knee_joint
+- name: action_rate_l2
+  weight: -0.01
+- name: flat_orientation_l2
+  weight: -50.0
+- name: undesired_contacts
+  weight: -1.0
+- name: stand_still
+  weight: -1.0
+  params:
+    joint_names: .*hipx_joint|.*hipy_joint|.*knee_joint
+- name: joint_mirror
+  weight: -0.03
+  params:
+    mirror_joints:
+    - [fl_(hipx|hipy|knee).*, hr_(hipx|hipy|knee).*]
+    - [fr_(hipx|hipy|knee).*, hl_(hipx|hipy|knee).*]
+- name: joint_deviation_l1
+  weight: -3.0
+  params:
+    joint_names: .*hipx.*
+- name: joint_deviation_l1
+  weight: -1.5
+  params:
+    joint_names: .*hipy.*
+- name: joint_deviation_l1
+  weight: -0.75
+  params:
+    joint_names: .*knee.*
+termination:
+- name: orientation
+  limit_angle: 0.7
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization:
+  type: extended
+agent:
+  num_envs: 4096
+  max_iterations: 20000
+  learning_rate: 0.001
+  entropy_coef: 0.003
+  hidden_dims: [512, 256, 128]

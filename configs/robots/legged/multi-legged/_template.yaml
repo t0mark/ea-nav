@@ -1,13 +1,77 @@
-# 다족보행(quadruped 등) 로봇 RL 보행 정책 파라미터 스키마
-# scripts/sim/controller/legged/rl/loco_rl_env.py의 LeggedRobotCfg와 1:1 대응
-# 실제 값(본체·발 링크 이름 등)은 로봇 USD를 확인해 채운다 (여기서는 필드 자리만 정의)
+# 다족보행(4족 등) 로봇 RL 보행 정책 파라미터 스키마
+# scripts/sim/controller/legged/rl/robot_profile.py의 RobotProfile과 1:1 대응
+#
+# 로봇 타입(quadruped/humanoid)으로 학습 방식을 통째로 묶어 상속하는 "프로필 버킷"은 쓰지 않는다 -
+# 아래 축(actuator/action/rewards/termination/policy_architecture/algorithm/domain_randomization)을
+# 이 파일 하나에 전부 직접, 완결된 형태로 선언한다. 이 로봇의 실제 오픈소스 학습 리포와 대조해 값을
+# 채우는 게 원칙이고, 대조할 리포가 없거나 구조가 아예 달라(모방학습 등) 대조가 불가능하면 가장 비슷한
+# 골격의 검증된 로봇 레시피로 대체하고 그 이유를 주석으로 남긴다.
 
 usd_path: null                       # data/sim/usd/real_robot/legged/multi-legged/ 밑의 파일명만
-morphology_group: quadruped          # rewards.py의 보상 세트 선택 기준
-base_body_name: null                 # 몸통 링크 이름 (base contact 종료 조건, base mass 랜덤화, height scanner 부착점)
-foot_body_names: null                # 발 링크 이름 정규식 (contact sensor, feet_air_time 보상)
-undesired_contact_body_names: null   # 지면에 닿으면 안 되는 링크 정규식 (허벅지/무릎 등)
-action_scale: 0.5                    # 관절 위치 액션 스케일 - 로봇 크기가 작을수록(go2 등) 낮춰야 함(0.25 등)
-default_joint_pos: {}                # 기본 자세 0이 리밋을 벗어나는 관절만 {관절 이름: 리밋 중앙값} (예: 무릎)
-actuator_stiffness: 25.0             # 관절 PD 게인 - usd authored 값은 안 믿고 effort 한계에서 역산 (usd_export_config.py 참고)
-actuator_damping: 0.5                # stiffness의 약 2%
+base_body_name: null                 # 몸통 링크 이름 (base contact 종료, base mass 랜덤화, height scanner 부착점)
+foot_body_names: null                # 발 링크 이름 정규식 (contact sensor, feet_air_time_multi 등)
+undesired_contact_body_names: null   # 지면에 닿으면 안 되는 링크 정규식 (허벅지/무릎 등, foot_contact_multi.undesired_contacts가 씀)
+
+default_joint_pos: {}                # {관절 이름: 각도} - 아래 default_joint_pos_complete로 의미가 갈린다
+default_joint_pos_complete: false    # false(기본) = 0이 리밋을 벗어나는 관절만 담은 override 목록(usd_export_config.py 자동 생성)
+                                      # true = 로봇 관절 전체에 대한 기본 자세를 이미 다 나열함(예: go2 - Isaac Lab 공식 자세 그대로 이식)
+                                      # 이 값을 잘못 두면 학습 시작 시 Isaac Lab이 "정규식이 매칭 안 됨" 에러를 던진다
+
+# [축] 관절 구동 모델 - scripts/.../rl/actuators/ 레지스트리
+# type: simple  -> 전 관절 동일 게인: {stiffness, damping}
+# type: grouped -> 관절 그룹별 게인: {groups: [{pattern, stiffness, damping}, ...]}
+actuator:
+  type: simple
+  stiffness: 25.0
+  damping: 0.5
+
+# [축] 액션 구성 - scripts/.../rl/actions/ 레지스트리
+# type: position_only
+#   {scale}                         -> 전 관절 위치제어, 스케일 1개
+#   {joint_names, scale}            -> joint_names 패턴에 해당하는 관절만 위치제어(나머지는 액션 밖, 고정 자세 유지)
+#   {groups: [{pattern, scale}, ..]} -> 관절 그룹마다 다른 스케일(joint_names/scale 대신 씀)
+# type: position_velocity_mixed     -> 다리=위치/바퀴=속도 혼합(바퀴-다리 하이브리드 로봇 전용):
+#   {position_joints: {pattern, scale}, velocity_joints: {pattern, scale}}
+action:
+  type: position_only
+  scale: 0.5
+
+# [축] 보상 - scripts/.../rl/rewards/ 레지스트리에 등록된 이름만 쓸 수 있다
+# 각 항목: {name, weight, params(선택, 함수별 기본값을 오버라이드 - 예: joint_names로 관절군 필터)}
+# 사용 가능한 이름: track_lin_vel_xy_exp, track_ang_vel_z_exp, lin_vel_z_l2, ang_vel_xy_l2,
+#   dof_torques_l2, dof_acc_l2, dof_vel_l2, action_rate_l2, flat_orientation_l2, dof_pos_limits,
+#   base_height_l2, joint_deviation_l1, stand_still, termination_penalty, alive,
+#   feet_air_time_multi, undesired_contacts, feet_air_time_biped, feet_slide, feet_contact,
+#   feet_swing_height, feet_gait, joint_mirror
+rewards:
+  - {name: track_lin_vel_xy_exp, weight: 1.0}
+  - {name: track_ang_vel_z_exp, weight: 0.5}
+  - {name: lin_vel_z_l2, weight: -2.0}
+  - {name: ang_vel_xy_l2, weight: -0.05}
+  - {name: dof_torques_l2, weight: -1.0e-5}
+  - {name: dof_acc_l2, weight: -2.5e-7}
+  - {name: action_rate_l2, weight: -0.01}
+  - {name: flat_orientation_l2, weight: -1.0}
+  - {name: dof_pos_limits, weight: -1.0}
+  - {name: feet_air_time_multi, weight: 0.125, params: {threshold: 0.5}}
+  - {name: undesired_contacts, weight: -1.0, params: {threshold: 1.0}}
+
+# [축] 종료조건 - scripts/.../rl/terminations/ 레지스트리. time_out은 항상 포함되므로 여기 안 적는다
+# 항목은 이름 문자열("contact") 또는 파라미터가 있는 딕셔너리({name: orientation, limit_angle: 0.7})
+termination: [contact]
+
+policy_architecture: mlp             # mlp(기본, [512,256,128] MLP) | recurrent(LSTM - g1/h1/h1_2류 재현)
+algorithm: ppo                       # ppo(기본) | amp(모방학습 - 참조 모션 데이터 필요, 미구현이라 즉시 에러남)
+
+# [축] 도메인 랜덤화 - scripts/.../rl/domain_randomization/ 레지스트리
+# basic(기본): 질량 ±1kg·마찰 고정값·push
+# extended: 액추에이터 게인·링크별 질량까지 랜덤화. 오버라이드 가능한 키:
+#   reset_joint_position_range([lo,hi]), mass_distribution_params([lo,hi]), actuator_gain_range([lo,hi])
+domain_randomization: basic
+
+agent:                               # PPO 러너 하이퍼파라미터 - scripts/.../rl/{policy_architecture,algorithm}/ 가 기본값을 보충
+  num_envs: 4096
+  max_iterations: 1500
+  learning_rate: 1.0e-3
+  entropy_coef: 0.01
+  hidden_dims: [512, 256, 128]

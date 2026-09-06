@@ -1,7 +1,68 @@
+# LimX Dynamics 공식 리포(limxdynamics/tron2_rl_lab) SF_TRON2A/limx_base_env_cfg.py +
+# assets/config/solefoot_tron2a_cfg.py를 재클론해 재검증 후 반영했다. actuator는 관절 그룹별로
+# 실제 게인이 다르다(proximal_pitch/roll+knee vs proximal_yaw+ankle_pitch, 둘 다 지연 PD인데
+# 지연 모델 자체는 우리 축에 없어 뺐다). actor/critic 비대칭 관측(critic만 height_scan+특권 정보)·
+# 10-step 히스토리 인코더·gait_phase/gait_command 관측·keep_balance·body_lin_acc·
+# action_smoothness·feet_distance·feet_ang_slide_penalty는 관측 축 자체가 없거나 이 리포 전용
+# 커스텀 함수라 뺐다.
 usd_path: limx_tron2a_sf.usd
-morphology_group: humanoid
 base_body_name: base_Link
 foot_body_names: ankle_pitch_L_Link|ankle_pitch_R_Link
-action_scale: 0.5
-actuator_stiffness: 150.0
-actuator_damping: 3.0
+undesired_contact_body_names: (?!ankle_pitch_).*
+actuator:
+  type: grouped
+  groups:
+  - pattern: proximal_pitch_[RL]_Joint|proximal_roll_[RL]_Joint|knee_[RL]_Joint
+    stiffness: 159.67
+    damping: 10.16
+  - pattern: proximal_yaw_[RL]_Joint|ankle_pitch_[RL]_Joint
+    stiffness: 53.22
+    damping: 3.39
+action:
+  type: position_only
+  scale: 0.25
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 0.8
+- name: ang_vel_xy_l2
+  weight: -0.15
+- name: lin_vel_z_l2
+  weight: -0.5
+- name: flat_orientation_l2
+  weight: -1.0
+- name: action_rate_l2
+  weight: -0.01
+- name: feet_air_time_biped
+  weight: 0.05
+  params:
+    threshold: 0.4
+- name: feet_slide
+  weight: -0.05
+- name: dof_torques_l2
+  weight: -4.0e-07
+- name: dof_vel_l2
+  weight: -5.0e-05
+- name: dof_acc_l2
+  weight: -5.0e-07
+- name: dof_pos_limits
+  weight: -0.2
+- name: undesired_contacts
+  weight: -1.0
+  params:
+    threshold: 10.0
+termination:
+- contact
+- name: orientation
+  limit_angle: 1.396
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization:
+  type: extended
+agent:
+  num_envs: 4096
+  max_iterations: 3000
+  learning_rate: 0.001
+  entropy_coef: 0.01
+  hidden_dims: [512, 256, 128]

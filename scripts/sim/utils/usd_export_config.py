@@ -599,14 +599,47 @@ def _compute_actuator_gains(stage, root_prim_path: str, leg_joint_names: set[str
     return stiffness, damping
 
 
+# 자동 생성 시 채워 넣는 기본 보상 목록 - scripts/sim/controller/legged/rl/rewards/ 레지스트리 이름 기준.
+# 로봇마다 실제 오픈소스 세팅과 대조해 축(actuator/action/rewards 등)을 다시 채우기 전까지 쓰는
+# "일단 학습이 도는" 최소 기본값이다 - configs/robots/legged/_profiles/ 같은 런타임 공유 버킷이
+# 아니라, 이 생성 함수 코드 안에서만 쓰는 부트스트랩 상수라는 점이 다르다.
+_DEFAULT_MULTI_LEGGED_REWARDS = [
+    {"name": "track_lin_vel_xy_exp", "weight": 1.0},
+    {"name": "track_ang_vel_z_exp", "weight": 0.5},
+    {"name": "lin_vel_z_l2", "weight": -2.0},
+    {"name": "ang_vel_xy_l2", "weight": -0.05},
+    {"name": "dof_torques_l2", "weight": -1.0e-5},
+    {"name": "dof_acc_l2", "weight": -2.5e-7},
+    {"name": "action_rate_l2", "weight": -0.01},
+    {"name": "flat_orientation_l2", "weight": -1.0},
+    {"name": "dof_pos_limits", "weight": -1.0},
+    {"name": "feet_air_time_multi", "weight": 0.125, "params": {"threshold": 0.5}},
+    {"name": "undesired_contacts", "weight": -1.0, "params": {"threshold": 1.0}},
+]
+_DEFAULT_HUMANOID_REWARDS = [
+    {"name": "track_lin_vel_xy_exp", "weight": 1.0},
+    {"name": "track_ang_vel_z_exp", "weight": 0.5},
+    {"name": "ang_vel_xy_l2", "weight": -0.05},
+    {"name": "dof_torques_l2", "weight": -1.0e-5},
+    {"name": "dof_acc_l2", "weight": -2.5e-7},
+    {"name": "action_rate_l2", "weight": -0.01},
+    {"name": "flat_orientation_l2", "weight": -1.0},
+    {"name": "dof_pos_limits", "weight": -1.0},
+    {"name": "termination_penalty", "weight": -200.0},
+    {"name": "feet_air_time_biped", "weight": 0.25, "params": {"threshold": 0.4}},
+    {"name": "feet_slide", "weight": -0.25},
+]
+
+
 def export_legged_robot_config(usd_path: Path, robot_category: str, output_path: Path) -> None:
     """usd 파일을 열어(스폰·물리 없이) 관절 구조와 authored 자세만으로 config를 만들어 저장한다.
 
-    발의 부모 링크(허벅지·정강이 등)는 quadruped에서만 undesired_contact_body_names로 함께 담는다 -
-    그 부위가 지면에 닿으면 쓰러진 것으로 볼 수 있는 quadruped와 달리, humanoid는 발이 지면에 닿는
-    것 자체가 정상 보행이라 이 개념이 안 맞고(rewards.py의 HumanoidRewardsCfg가 대신 호핑 억제
-    보상으로 자세를 잡는다), morphology_group도 로봇 형상 판별이 아니라 폴더 카테고리로 그대로
-    정한다(multi-legged -> quadruped, humanoid -> humanoid).
+    발의 부모 링크(허벅지·정강이 등)는 multi-legged에서만 undesired_contact_body_names로 함께 담는다 -
+    그 부위가 지면에 닿으면 쓰러진 것으로 볼 수 있는 multi-legged와 달리, humanoid는 발이 지면에 닿는
+    것 자체가 정상 보행이라 이 개념이 안 맞고(feet_air_time_biped 보상이 대신 호핑 억제로 자세를
+    잡는다). actuator/action/rewards 등 학습 방식 축은 여기서는 "일단 도는" 기본값만 채우고, 실제
+    오픈소스 리포와 대조한 정확한 값은 사람이 로봇 yaml을 직접 다시 채워야 한다(usd 구조만으로는
+    PD 게인 그룹핑·보상 커스터마이징까지 알아낼 수 없기 때문).
     """
     if robot_category not in ("multi-legged", "humanoid"):
         raise ValueError(f"알 수 없는 legged 카테고리: {robot_category}")
@@ -637,12 +670,27 @@ def export_legged_robot_config(usd_path: Path, robot_category: str, output_path:
         foot_leaves = sorted(limb_leaves, key=lambda path: _authored_height(stage, path))[:_HUMANOID_FOOT_COUNT]
 
     foot_short_names = sorted(path.rsplit("/", 1)[-1] for path in foot_leaves)
+    leg_joint_names = _leg_chain_joint_names(foot_leaves, parent_of, joint_name_of)
+    stiffness, damping = _compute_actuator_gains(stage, root_prim_path, leg_joint_names)
+
     config = {
         "usd_path": usd_path.name,
-        "morphology_group": "humanoid" if robot_category == "humanoid" else "quadruped",
         "base_body_name": root_body_path.rsplit("/", 1)[-1],
         "foot_body_names": "|".join(re.escape(name) for name in foot_short_names),
-        "action_scale": 0.5,
+        "actuator": {"type": "simple", "stiffness": stiffness, "damping": damping},
+        "action": {"type": "position_only", "scale": 0.5},
+        "rewards": _DEFAULT_MULTI_LEGGED_REWARDS if robot_category == "multi-legged" else _DEFAULT_HUMANOID_REWARDS,
+        "termination": ["contact"],
+        "policy_architecture": "mlp",
+        "algorithm": "ppo",
+        "domain_randomization": "basic",
+        "agent": {
+            "num_envs": 4096,
+            "max_iterations": 1500 if robot_category == "multi-legged" else 3000,
+            "learning_rate": 1.0e-3,
+            "entropy_coef": 0.01,
+            "hidden_dims": [512, 256, 128],
+        },
     }
     if robot_category == "multi-legged":
         parent_short_names = {parent_of[path].rsplit("/", 1)[-1] for path in foot_leaves}
@@ -651,11 +699,6 @@ def export_legged_robot_config(usd_path: Path, robot_category: str, output_path:
     default_joint_pos = _compute_default_joint_overrides(stage, root_prim_path)
     if default_joint_pos:
         config["default_joint_pos"] = default_joint_pos
-
-    leg_joint_names = _leg_chain_joint_names(foot_leaves, parent_of, joint_name_of)
-    config["actuator_stiffness"], config["actuator_damping"] = _compute_actuator_gains(
-        stage, root_prim_path, leg_joint_names
-    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:

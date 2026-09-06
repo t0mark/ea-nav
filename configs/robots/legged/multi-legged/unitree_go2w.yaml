@@ -1,13 +1,76 @@
+# fan-ziqi/robot_lab 공식 리포(config/wheeled/unitree_go2w/rough_env_cfg.py + assets/unitree.py)를
+# 재클론해 재검증 후 반영했다. 다리는 위치제어(HipX만 0.125/나머지 0.25), 바퀴는 속도제어로 분리했다
+# (이전엔 바퀴까지 위치제어라 실제로 구르지 못하는 버그가 있었다). contact_forces·
+# feet_contact_without_cmd·joint_power·upward·joint_pos_penalty는 robot_lab 전용 커스텀 보상
+# 함수라 우리 레지스트리에 없어 뺐다.
 usd_path: unitree_go2w.usd
-morphology_group: quadruped
 base_body_name: base
 foot_body_names: FL_foot|FR_foot|RL_foot|RR_foot
-action_scale: 0.5
 undesired_contact_body_names: FL_calf|FR_calf|RL_calf|RR_calf
+actuator:
+  type: grouped
+  groups:
+  - pattern: ^(?!.*_foot_joint).*$
+    stiffness: 25.0
+    damping: 0.5
+  - pattern: .*_foot_joint
+    stiffness: 0.0
+    damping: 0.5
+action:
+  type: position_velocity_mixed
+  position_joints:
+    pattern: ^(?!.*_foot_joint).*$
+    scale: {".*_hip_joint": 0.125, "^(?!.*_hip_joint).*$": 0.25}
+  velocity_joints:
+    pattern: .*_foot_joint
+    scale: 5.0
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 3.0
+- name: track_ang_vel_z_exp
+  weight: 1.5
+- name: lin_vel_z_l2
+  weight: -2.0
+- name: ang_vel_xy_l2
+  weight: -0.05
+- name: dof_torques_l2
+  weight: -2.5e-05
+  params:
+    joint_names: ^(?!.*_foot_joint).*$
+- name: dof_acc_l2
+  weight: -2.5e-07
+  params:
+    joint_names: ^(?!.*_foot_joint).*$
+- name: action_rate_l2
+  weight: -0.01
+- name: dof_pos_limits
+  weight: -5.0
+  params:
+    joint_names: ^(?!.*_foot_joint).*$
+- name: stand_still
+  weight: -2.0
+  params:
+    joint_names: ^(?!.*_foot_joint).*$
+- name: undesired_contacts
+  weight: -1.0
+- name: joint_mirror
+  weight: -0.05
+  params:
+    mirror_joints:
+    - [FR_(hip|thigh|calf).*, RL_(hip|thigh|calf).*]
+    - [FL_(hip|thigh|calf).*, RR_(hip|thigh|calf).*]
 default_joint_pos:
   FL_calf_joint: -101.99966
   FR_calf_joint: -101.99966
   RL_calf_joint: -101.99966
   RR_calf_joint: -101.99966
-actuator_stiffness: 23.7
-actuator_damping: 0.474
+termination: []  # 원본이 illegal_contact 종료조건 자체를 꺼둔다
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization: basic
+agent:
+  num_envs: 4096
+  max_iterations: 20000
+  learning_rate: 0.001
+  entropy_coef: 0.01
+  hidden_dims: [512, 256, 128]

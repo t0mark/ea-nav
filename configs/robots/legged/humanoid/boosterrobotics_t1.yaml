@@ -1,7 +1,70 @@
+# Booster Robotics 공식 리포(BoosterRobotics/booster_gym) T1.yaml 세팅을 최대한 이식했다. base_body_name/
+# foot_body_names가 공식 yaml의 "Trunk"/"left_foot_link"/"right_foot_link"와 정확히 일치해 같은 출처
+# USD로 보고 관절 이름 표기(Hip_*/Knee_*/Ankle_*)를 그대로 신뢰했다. feet_yaw_diff/mean·feet_distance·
+# feet_roll·power·feet_swing(양의 보상)은 이 리포 전용 커스텀 함수라 우리 레지스트리에 없어 뺐다.
 usd_path: boosterrobotics_t1.usd
-morphology_group: humanoid
 base_body_name: Trunk
 foot_body_names: left_foot_link|right_foot_link
-action_scale: 0.5
-actuator_stiffness: 30.0
-actuator_damping: 0.6
+undesired_contact_body_names: Trunk|H1|H2|AL|AR|Waist|Hip|Shank|Ankle
+actuator:
+  type: grouped
+  groups:
+  - pattern: .*Hip.*
+    stiffness: 200.0
+    damping: 5.0
+  - pattern: .*Knee.*
+    stiffness: 200.0
+    damping: 5.0
+  - pattern: .*Ankle.*
+    stiffness: 50.0
+    damping: 1.0
+action:
+  type: position_only
+  joint_names: .*Hip.*|.*Knee.*|.*Ankle.*
+  scale: 1.0
+rewards:
+- name: alive
+  weight: 0.25
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 0.5
+- name: base_height_l2
+  weight: -20.0
+  params:
+    target_height: 0.68
+- name: flat_orientation_l2
+  weight: -5.0
+- name: dof_torques_l2
+  weight: -2.0e-04
+- name: lin_vel_z_l2
+  weight: -2.0
+- name: ang_vel_xy_l2
+  weight: -0.2
+- name: dof_vel_l2
+  weight: -1.0e-04
+- name: dof_acc_l2
+  weight: -1.0e-07
+- name: action_rate_l2
+  weight: -1.0
+- name: dof_pos_limits
+  weight: -1.0
+- name: undesired_contacts
+  weight: -1.0
+- name: feet_slide
+  weight: -0.1
+termination:
+- contact
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization:
+  type: extended
+  actuator_gain_range: [0.95, 1.05]
+agent:
+  num_envs: 4096
+  max_iterations: 10000
+  learning_rate: 1.0e-05
+  entropy_coef: -0.01
+  gamma: 0.995
+  num_learning_epochs: 20
+  hidden_dims: [512, 256, 128]

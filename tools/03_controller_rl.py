@@ -5,7 +5,11 @@ robot_id 하나로 이미 어떤 usd를 볼지 정해지는데 카테고리까�
 받는 셈이라 굳이 인자로 두지 않는다.
 
 configs/robots/legged/{robot_type}/{robot_id}.yaml이 없으면 scripts/sim/utils/usd_export_config.py로
-자동 생성한 뒤 바로 학습을 이어간다.
+자동 생성한 뒤 바로 학습을 이어간다. 이 yaml 한 장이 로봇의 물리적 사실(usd 경로·base/foot 링크 이름)뿐
+아니라 학습 방식 축(actuator/action/rewards/termination/policy_architecture/algorithm/
+domain_randomization) 선택과 agent 하이퍼파라미터까지 전부 담고 있어, 로봇 종류에 따른 기본값 분기가
+이 진입점 코드 안에는 전혀 없다 - scripts/sim/controller/legged/rl/robot_profile.py가 그 yaml을 파싱하고,
+loco_rl_env.py/agent_cfg.py가 각 축 레지스트리를 조회해 조립한다.
 
 학습 중에는 렌더링을 절대 켜지 않는다 - 병렬 env가 수천 개(PhysX)인 상태에서 카메라 렌더링까지
 동시에 돌리면 GPU 순간 전력이 튀어 PSU 보호회로가 시스템 전체를 강제 종료시키는 것을 실제로
@@ -36,8 +40,8 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 parser = argparse.ArgumentParser(description="legged 로봇 RL 보행 정책 학습")
 parser.add_argument("--robot-id", type=str, required=True, help="data/sim/usd/real_robot/legged/ 안의 robot_id")
-parser.add_argument("--num-envs", type=int, default=None, help="병렬 env 수 (생략 시 로봇 종류별 기본값)")
-parser.add_argument("--max-iterations", type=int, default=None, help="학습 반복 횟수 (생략 시 로봇 종류별 기본값)")
+parser.add_argument("--num-envs", type=int, default=None, help="병렬 env 수 (생략 시 로봇 yaml의 agent.num_envs)")
+parser.add_argument("--max-iterations", type=int, default=None, help="학습 반복 횟수 (생략 시 로봇 yaml의 agent.max_iterations)")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, _ = parser.parse_known_args()
 args_cli.headless = True
@@ -49,26 +53,17 @@ simulation_app = app_launcher.app
 # AppLauncher 기동 이후에만 isaaclab 의존 모듈(및 pxr를 쓰는 usd_export_config)을 임포트할 수 있다
 from isaaclab.envs import ManagerBasedRLEnv  # noqa: E402
 from isaaclab.utils.io import dump_yaml  # noqa: E402
-from isaaclab_rl.rsl_rl import (  # noqa: E402
-    RslRlOnPolicyRunnerCfg,
-    RslRlPpoActorCriticCfg,
-    RslRlPpoAlgorithmCfg,
-    RslRlVecEnvWrapper,
-    export_policy_as_jit,
-)
+from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, export_policy_as_jit  # noqa: E402
 from rsl_rl.runners import OnPolicyRunner  # noqa: E402
 
+from scripts.sim.controller.legged.rl.agent_cfg import build_agent_cfg  # noqa: E402
 from scripts.sim.controller.legged.rl.loco_rl_env import build_loco_rl_env_cfg  # noqa: E402
+from scripts.sim.controller.legged.rl.robot_profile import RobotProfile  # noqa: E402
 from scripts.sim.utils.usd_export_config import export_legged_robot_config  # noqa: E402
 
 _USD_ROOT = _REPO_ROOT / "data" / "sim" / "usd" / "real_robot" / "legged"
 _ROBOT_CONFIG_ROOT = _REPO_ROOT / "configs" / "robots" / "legged"
 _POLICY_ROOT = _REPO_ROOT / "data" / "sim" / "policies" / "legged"
-
-# 로봇 종류별 기본 학습 규모 - 휴머노이드는 관측·행동 공간이 더 크고 학습이 어려워 반복 횟수를 늘린다
-_DEFAULT_NUM_ENVS = {"multi-legged": 4096, "humanoid": 4096}
-_DEFAULT_MAX_ITERATIONS = {"multi-legged": 1500, "humanoid": 3000}
-_DEFAULT_HIDDEN_DIMS = {"multi-legged": [512, 256, 128], "humanoid": [512, 256, 128]}
 
 
 def _resolve_robot_type(robot_id: str) -> str:
@@ -92,46 +87,16 @@ def _ensure_robot_config(robot_type: str, robot_id: str) -> None:
     export_legged_robot_config(usd_path, robot_type, config_path)
 
 
-def _build_agent_cfg(robot_type: str, max_iterations: int, experiment_name: str) -> RslRlOnPolicyRunnerCfg:
-    """로봇 종류별 기본값으로 PPO 러너 설정을 만든다 (Isaac Lab 표준 legged locomotion PPO 하이퍼파라미터)."""
-    hidden_dims = _DEFAULT_HIDDEN_DIMS[robot_type]
-    return RslRlOnPolicyRunnerCfg(
-        num_steps_per_env=24,
-        max_iterations=max_iterations,
-        save_interval=50,
-        experiment_name=experiment_name,
-        policy=RslRlPpoActorCriticCfg(
-            init_noise_std=1.0,
-            actor_obs_normalization=False,
-            critic_obs_normalization=False,
-            actor_hidden_dims=hidden_dims,
-            critic_hidden_dims=hidden_dims,
-            activation="elu",
-        ),
-        algorithm=RslRlPpoAlgorithmCfg(
-            value_loss_coef=1.0,
-            use_clipped_value_loss=True,
-            clip_param=0.2,
-            entropy_coef=0.01,
-            num_learning_epochs=5,
-            num_mini_batches=4,
-            learning_rate=1.0e-3,
-            schedule="adaptive",
-            gamma=0.99,
-            lam=0.95,
-            desired_kl=0.01,
-            max_grad_norm=1.0,
-        ),
-    )
-
-
 def main() -> None:
     """robot_id의 종류를 판별하고 config를 준비해 env·agent cfg를 조립한 뒤, 헤드리스로 학습을 돌린다."""
     robot_type = _resolve_robot_type(args_cli.robot_id)
     _ensure_robot_config(robot_type, args_cli.robot_id)
 
-    num_envs = args_cli.num_envs or _DEFAULT_NUM_ENVS[robot_type]
-    max_iterations = args_cli.max_iterations or _DEFAULT_MAX_ITERATIONS[robot_type]
+    # 로봇 yaml 하나(RobotProfile)가 env cfg와 agent cfg 양쪽에 필요한 축 선언을 전부 담고 있다
+    profile = RobotProfile.load(robot_type, args_cli.robot_id)
+    num_envs = args_cli.num_envs or profile.agent.get("num_envs", 4096)
+    if args_cli.max_iterations is not None:
+        profile.agent["max_iterations"] = args_cli.max_iterations
 
     # 로봇별 env cfg 조립 - 지형·로봇 USD·보상 세트가 여기서 전부 하나로 묶인다
     print(f"[controller_rl] {robot_type}/{args_cli.robot_id} env 조립 중 (num_envs={num_envs})...")
@@ -140,13 +105,14 @@ def main() -> None:
     env = ManagerBasedRLEnv(cfg=env_cfg)
 
     experiment_name = f"{robot_type}_{args_cli.robot_id}"
-    agent_cfg = _build_agent_cfg(robot_type, max_iterations, experiment_name)
+    agent_cfg = build_agent_cfg(profile, experiment_name)
 
     # PPO 러너 조립 - 로그는 정책 산출물과 분리해 별도 학습 로그 디렉터리에 남긴다
     vec_env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
     log_dir = str(_POLICY_ROOT / "_train_logs" / experiment_name)
     runner = OnPolicyRunner(vec_env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
 
+    max_iterations = profile.agent["max_iterations"]
     print(f"[controller_rl] 학습 시작 - max_iterations={max_iterations} (헤드리스, 렌더링 없음)")
     print(f"[controller_rl] 진행 상황: tensorboard --logdir {log_dir}")
     try:

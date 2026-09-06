@@ -1,7 +1,76 @@
+# DR02 공식(DeepRoboticsLab/rl_training)은 AMP(모션 판별기 기반 모방학습)라 참조 모션 데이터가 없으면
+# 구조적으로 재현이 불가능하다 - PPO 자체를 안 쓰는 다른 알고리즘이라 "근사"가 성립하지 않는다.
+# 그래서 로봇 골격을 비교해 가장 비슷한, 실제로 검증된 PPO 레시피로 대체했다: DR02 관절 구성
+# (다리 6dof: hip_y/hip_x/hip_z/knee/ankle_y/ankle_x, 허리 1dof, 팔 4dof: shoulder_y/x/z/elbow,
+# 좌우 대칭)이 Unitree h1_2(다리 6dof: hip_yaw/roll/pitch/knee/ankle_pitch/roll, torso 1dof,
+# 팔 4dof: shoulder_pitch/roll/yaw/elbow_pitch)와 관절 자유도 구성이 정확히 일치해, h1_2에 이미
+# 이식해 둔 Unitree 공식 레시피(다리만 액션, LSTM 정책, PPO)를 DR02의 실제 관절 이름으로 그대로
+# 옮겼다. actuator 게인은 DR02 usd의 effort limit에서 역산한 실측값을 그대로 쓴다(h1_2 값을 베끼지
+# 않음 - DR02가 더 무겁고 강한 로봇이라 실제 토크 한계가 다르다).
 usd_path: deeprobotics_dr02.usd
-morphology_group: humanoid
 base_body_name: base_link
 foot_body_names: left_ankle_x_link|right_ankle_x_link
-action_scale: 0.5
-actuator_stiffness: 363.0
-actuator_damping: 7.26
+undesired_contact_body_names: .*_hip.*|.*_knee.*
+actuator:
+  type: simple
+  stiffness: 363.0
+  damping: 7.26
+action:
+  type: position_only
+  joint_names: .*_hip_y_joint|.*_hip_x_joint|.*_hip_z_joint|.*_knee_joint|.*_ankle_y_joint|.*_ankle_x_joint
+  scale: 0.25
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 0.5
+- name: lin_vel_z_l2
+  weight: -2.0
+- name: ang_vel_xy_l2
+  weight: -0.05
+- name: flat_orientation_l2
+  weight: -1.0
+- name: base_height_l2
+  weight: -10.0
+  params:
+    target_height: 1.0
+- name: dof_acc_l2
+  weight: -2.5e-07
+- name: undesired_contacts
+  weight: -1.0
+- name: action_rate_l2
+  weight: -0.01
+- name: dof_pos_limits
+  weight: -5.0
+- name: alive
+  weight: 0.15
+- name: joint_deviation_l1
+  weight: -1.0
+  params:
+    joint_names:
+    - .*_hip_x_joint
+    - .*_hip_z_joint
+- name: feet_slide
+  weight: -0.2
+- name: feet_swing_height
+  weight: -20.0
+- name: feet_contact
+  weight: 0.18
+termination:
+- contact
+policy_architecture: recurrent
+algorithm: ppo
+domain_randomization:
+  type: extended
+  reset_joint_position_range: [1.0, 1.0]
+  mass_distribution_params: [-1.0, 3.0]
+agent:
+  num_envs: 4096
+  max_iterations: 10000
+  learning_rate: 0.001
+  entropy_coef: 0.01
+  init_noise_std: 0.8
+  hidden_dims: [32]
+  rnn_type: lstm
+  rnn_hidden_dim: 64
+  rnn_num_layers: 1

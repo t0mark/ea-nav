@@ -1,8 +1,52 @@
+# IsaacLab 공식(anymal_c/rough_env_cfg.py, base는 velocity_env_cfg.py 그대로) + legged_gym
+# anymal_c_rough_config.py를 재클론해 재검증 후 반영했다. undesired_contact_body_names가
+# shank_fixed(정강이)로 잘못돼 있던 것을 로컬 URDF 대조로 확인해 thigh_fixed(허벅지 - THIGH/SHANK
+# 링크 자체는 collision이 없고 별도 "_fixed" 프록시에만 있음)로 고쳤다. damping도 legged_gym
+# 실측값(2.0)으로 맞췄다. flat_orientation_l2/dof_pos_limits는 IsaacLab rough 기본값이 0.0
+# (비활성)이라 제거. ANYmal 공식 액추에이터는 학습된 LSTM 액추에이터망이라 단순 PD로는 재현
+# 불가능 - stiffness/damping은 legged_gym의 단순 PD 근사치(구조 자체가 다름)를 쓴다.
 usd_path: anybotics_anymal_c.usd
-morphology_group: quadruped
 base_body_name: base
 foot_body_names: LF_FOOT|LH_FOOT|RF_FOOT|RH_FOOT
-action_scale: 0.5
-undesired_contact_body_names: LF_shank_fixed|LH_shank_fixed|RF_shank_fixed|RH_shank_fixed
-actuator_stiffness: 80.0
-actuator_damping: 1.6
+undesired_contact_body_names: LF_thigh_fixed|LH_thigh_fixed|RF_thigh_fixed|RH_thigh_fixed
+actuator:
+  type: simple
+  stiffness: 80.0
+  damping: 2.0
+action:
+  type: position_only
+  scale: 0.5
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 0.5
+- name: lin_vel_z_l2
+  weight: -2.0
+- name: ang_vel_xy_l2
+  weight: -0.05
+- name: dof_torques_l2
+  weight: -1.0e-05
+- name: dof_acc_l2
+  weight: -2.5e-07
+- name: action_rate_l2
+  weight: -0.01
+- name: feet_air_time_multi
+  weight: 0.125
+  params:
+    threshold: 0.5
+- name: undesired_contacts
+  weight: -1.0
+  params:
+    threshold: 1.0
+termination:
+- contact
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization: basic
+agent:
+  num_envs: 4096
+  max_iterations: 1500
+  learning_rate: 0.001
+  entropy_coef: 0.005
+  hidden_dims: [512, 256, 128]

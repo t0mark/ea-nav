@@ -1,7 +1,78 @@
+# Unitree 공식 리포(unitreerobotics/unitree_rl_gym, legged_gym) h1_2_config.py 세팅을 그대로 이식.
 usd_path: unitree_h1_2.usd
-morphology_group: humanoid
 base_body_name: pelvis
 foot_body_names: left_ankle_roll_link|right_ankle_roll_link
-action_scale: 0.5
-actuator_stiffness: 200.0
-actuator_damping: 4.0
+actuator:
+  type: grouped
+  groups:
+  - pattern: .*_hip_yaw_joint|.*_hip_roll_joint|.*_hip_pitch_joint
+    stiffness: 200.0
+    damping: 2.5
+  - pattern: .*_knee_joint
+    stiffness: 300.0
+    damping: 4.0
+  - pattern: .*_ankle_pitch_joint|.*_ankle_roll_joint
+    stiffness: 40.0
+    damping: 2.0
+  - pattern: .*_shoulder_.*|.*_elbow_pitch_joint
+    stiffness: 40.0
+    damping: 10.0
+action:
+  type: position_only
+  joint_names: .*_hip_yaw_joint|.*_hip_roll_joint|.*_hip_pitch_joint|.*_knee_joint|.*_ankle_pitch_joint|.*_ankle_roll_joint
+  scale: 0.25
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 0.5
+- name: lin_vel_z_l2
+  weight: -2.0
+- name: ang_vel_xy_l2
+  weight: -0.05
+- name: flat_orientation_l2
+  weight: -1.0
+- name: base_height_l2
+  weight: -10.0
+  params:
+    target_height: 1.0
+- name: dof_acc_l2
+  weight: -2.5e-07
+- name: dof_vel_l2
+  weight: -1.0e-03
+- name: action_rate_l2
+  weight: -0.01
+- name: dof_pos_limits
+  weight: -5.0
+- name: alive
+  weight: 0.15
+- name: joint_deviation_l1
+  weight: -1.0
+  params:
+    joint_names:
+    - .*_hip_yaw_joint
+    - .*_hip_roll_joint
+- name: feet_slide
+  weight: -0.2
+- name: feet_swing_height
+  weight: -20.0
+- name: feet_contact
+  weight: 0.18
+termination:
+- contact
+policy_architecture: recurrent
+algorithm: ppo
+domain_randomization:
+  type: extended
+  reset_joint_position_range: [1.0, 1.0]
+  mass_distribution_params: [-1.0, 3.0]
+agent:
+  num_envs: 4096
+  max_iterations: 10000
+  learning_rate: 0.001
+  entropy_coef: 0.01
+  init_noise_std: 0.8
+  hidden_dims: [32]
+  rnn_type: lstm
+  rnn_hidden_dim: 64
+  rnn_num_layers: 1

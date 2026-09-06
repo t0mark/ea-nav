@@ -1,0 +1,37 @@
+# F1TENTH(1/10 스케일 RC카) 애커먼 조향 config
+# 출처: https://github.com/UWRobotLearning/WheeledLab (University of Washington Robot Learning Lab, BSD-3-Clause)
+# source/wheeledlab_assets/data/Robots/F1TENTH/f1tenth.usd
+#
+# NVIDIA-Omniverse 공식 sample-ackermann-amr의 F1TENTH를 먼저 시도했으나, 그 asset은 바퀴마다
+# 실제 더블 위시본 서스펜션(컨트롤암 2개+쇼크 3관절)이 폐루프로 모델링돼 있어 Isaac Lab의 트리 기반
+# GPU articulation 솔버와 맞지 않았다 - 구동 명령을 전혀 안 줘도 차체가 스스로 계속 미끄러지는 것을
+# 실측으로 확인했다(정지 명령 500스텝 동안 위치가 계속, 심지어 가속하며 이동). 이 WheeledLab 자산은
+# 애초에 Isaac Lab RL 학습용으로 만들어져 서스펜션 없이 조향 관절(rotator_left/right) + 바퀴 4개가
+# 전부 base_link(또는 조향 링크)에 직접 매달린 단순 트리 구조라 이 문제가 없다.
+#
+# wheelbase/track_width/wheel_radius는 usd를 직접 열어(pxr) 바퀴 4개의 월드 좌표계 바운딩 박스
+# 중심으로 실측했다 - 뒷바퀴 x=-0.170, 앞바퀴 x=+0.195 (wheelbase=0.365m), 좌우 바퀴 y=±0.134
+# (track_width=0.272m), 바퀴 지름 0.109m(반지름 0.0545m).
+#
+# 4WD 차량이라(원본 WheeledLab 액추에이터 설정도 앞뒤 바퀴 전부 구동) drive_wheel_joint_names에
+# 4개를 전부 넣는다.
+
+usd_path: uw_f1tenth.usd
+wheelbase: 0.365
+track_width: 0.272
+wheel_radius: 0.0545
+left_steering_joint_name: rotator_left
+right_steering_joint_name: rotator_right
+drive_wheel_joint_names:
+  - wheel_back_left
+  - wheel_back_right
+  - wheel_front_left
+  - wheel_front_right
+
+# 부호 규약(양수=전진/좌회전)과 기본 nav 속도가 별도 보정 없이 그대로 맞았다 - ㄱ자 경로를 161프레임
+# (약 2.7초) 만에 깔끔하게 완주하는 것을 확인했다. 서스펜션이 없는 단순 트리 구조라 다른 diff/omni
+# 로봇들과 달리 마찰 임계값 문제도 없었다.
+direction_sign: 1.0
+steering_sign: 1.0
+nav_linear_velocity: 1.0
+nav_max_angular_velocity: 3.0

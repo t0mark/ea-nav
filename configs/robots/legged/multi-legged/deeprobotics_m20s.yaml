@@ -1,8 +1,66 @@
+# M20s 전용 공식 학습 리포는 없다(DeepRoboticsLab 조직 전체 리포 재확인 완료, 흔적 없음) - 같은
+# 플랫폼인 M20의 공식 리포(DeepRoboticsLab/rl_training, config/wheeled/deeprobotics_m20)에서 검증한
+# 다리(위치제어)/바퀴(속도제어) 분리를 그대로 가져왔다. actuator 게인(140.0/2.8)은 M20 공식값
+# (80.0/2.0)의 1.75배로, M20s가 더 무거운 변형이라 usd effort_limit 기준으로 역산된 값을 유지했다
+# (공식 수치가 아니므로 근거가 약함 - usd effort_limit이 실제로 그 비율인지는 확인했으나 stiffness를
+# 그 비율 그대로 스케일하는 게 타당한지는 검증 못함).
 usd_path: deeprobotics_m20s.usd
-morphology_group: quadruped
 base_body_name: base_link
 foot_body_names: fl_wheel|fr_wheel|hl_wheel|hr_wheel
-action_scale: 0.5
 undesired_contact_body_names: fl_knee|fr_knee|hl_knee|hr_knee
-actuator_stiffness: 140.0
-actuator_damping: 2.8
+actuator:
+  type: grouped
+  groups:
+  - pattern: .*hipx_joint|.*hipy_joint|.*knee_joint
+    stiffness: 140.0
+    damping: 2.8
+  - pattern: .*_wheel_joint
+    stiffness: 0.0
+    damping: 0.6
+action:
+  type: position_velocity_mixed
+  position_joints:
+    pattern: .*hipx_joint|.*hipy_joint|.*knee_joint
+    scale: {".*hipx_joint": 0.125, "^(?!.*hipx_joint).*$": 0.25}
+  velocity_joints:
+    pattern: .*_wheel_joint
+    scale: 5.0
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 0.5
+- name: lin_vel_z_l2
+  weight: -2.0
+- name: ang_vel_xy_l2
+  weight: -0.05
+- name: dof_torques_l2
+  weight: -1.0e-05
+  params:
+    joint_names: .*hipx_joint|.*hipy_joint|.*knee_joint
+- name: dof_acc_l2
+  weight: -2.5e-07
+  params:
+    joint_names: .*hipx_joint|.*hipy_joint|.*knee_joint
+- name: action_rate_l2
+  weight: -0.01
+- name: flat_orientation_l2
+  weight: -1.0
+- name: dof_pos_limits
+  weight: -1.0
+- name: undesired_contacts
+  weight: -1.0
+  params:
+    threshold: 1.0
+termination:
+- name: orientation
+  limit_angle: 0.7
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization: basic
+agent:
+  num_envs: 4096
+  max_iterations: 1500
+  learning_rate: 0.001
+  entropy_coef: 0.01
+  hidden_dims: [512, 256, 128]

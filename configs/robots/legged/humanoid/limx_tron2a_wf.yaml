@@ -1,7 +1,80 @@
+# LimX Dynamics 공식 리포(limxdynamics/tron2_rl_lab) WF_TRON2A/limx_base_env_cfg.py +
+# assets/config/wheelfoot_tron2a_cfg.py를 재클론해 재검증 후 반영했다. 다리(위치제어) 4관절 + 바퀴
+# (속도제어) 2관절 분리와 실제 관절 이름(wheel_L_Joint/wheel_R_Joint)을 대조 확인했다. actor/critic
+# 비대칭 관측·히스토리 인코더·action_smoothness(2차 미분)·base_projection_at_feet_midpoint는
+# 관측 축이 없거나 이 리포 전용 커스텀 함수라 뺐다.
 usd_path: limx_tron2a_wf.usd
-morphology_group: humanoid
 base_body_name: base_Link
 foot_body_names: wheel_L_Link|wheel_R_Link
-action_scale: 0.5
-actuator_stiffness: 150.0
-actuator_damping: 3.0
+undesired_contact_body_names: proximal_pitch_.*|proximal_roll_.*|knee_.*|base_Link
+actuator:
+  type: grouped
+  groups:
+  - pattern: proximal_pitch_[RL]_Joint|proximal_roll_[RL]_Joint|knee_[RL]_Joint
+    stiffness: 159.67
+    damping: 10.16
+  - pattern: proximal_yaw_[RL]_Joint
+    stiffness: 53.22
+    damping: 3.39
+  - pattern: wheel_[LR]_Joint
+    stiffness: 0.0
+    damping: 0.6
+action:
+  type: position_velocity_mixed
+  position_joints:
+    pattern: proximal_pitch_[RL]_Joint|proximal_roll_[RL]_Joint|proximal_yaw_[RL]_Joint|knee_[RL]_Joint
+    scale: 0.25
+  velocity_joints:
+    pattern: wheel_[LR]_Joint
+    scale: 1.0
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 3.0
+  params:
+    std: 0.4472
+- name: track_ang_vel_z_exp
+  weight: 1.0
+- name: lin_vel_z_l2
+  weight: -0.3
+- name: ang_vel_xy_l2
+  weight: -0.3
+- name: flat_orientation_l2
+  weight: -12.0
+- name: action_rate_l2
+  weight: -0.02
+- name: undesired_contacts
+  weight: -0.25
+  params:
+    threshold: 10.0
+- name: dof_torques_l2
+  weight: -4.0e-07
+- name: dof_acc_l2
+  weight: -1.5e-07
+- name: dof_pos_limits
+  weight: -2.0
+  params:
+    joint_names: (?!wheel_).*
+- name: dof_vel_l2
+  key: dof_vel_wheel_l2
+  weight: -5.0e-05
+  params:
+    joint_names: wheel_.+
+- name: dof_vel_l2
+  key: dof_vel_nonwheel_l2
+  weight: -0.004
+  params:
+    joint_names: (?!wheel_).*
+termination:
+- contact
+- name: orientation
+  limit_angle: 1.396
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization:
+  type: extended
+agent:
+  num_envs: 4096
+  max_iterations: 3000
+  learning_rate: 0.001
+  entropy_coef: 0.01
+  hidden_dims: [512, 256, 128]

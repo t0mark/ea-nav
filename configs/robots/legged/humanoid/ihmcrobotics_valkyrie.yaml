@@ -1,7 +1,94 @@
+# Valkyrie 공식 RL 학습 리포는 없다(ihmcrobotics 조직 148개 리포 전수 확인, 전부 모멘텀 기반 QP
+# 컨트롤러) - 비공식 3rd-party(RobotGait/mjlab-valkyrie, mjlab/MuJoCo 기반)를 재클론해 실제
+# actuator 게인·action_scale만 반영했다. 이 리포도 시뮬레이터가 달라(MuJoCo) reward/알고리즘은
+# 대조 불가능해 기존 humanoid 기본 보상을 유지한다. 관절 이름은 NASA 표준 camelCase 표기(HipRoll
+# 등)를 그대로 썼다 - 우리 usd의 base/foot 링크 이름(pelvis/leftFoot 등)도 같은 표기라 관절
+# 이름도 같은 규칙을 따를 가능성이 높다고 판단했으나, 확정 검증은 못 했다(usd를 직접 열어봐야 함).
 usd_path: ihmcrobotics_valkyrie.usd
-morphology_group: humanoid
 base_body_name: pelvis
 foot_body_names: leftFoot|rightFoot
-action_scale: 0.5
-actuator_stiffness: 350.0
-actuator_damping: 7.0
+actuator:
+  type: grouped
+  groups:
+  - pattern: .*HipRoll|.*HipPitch|.*KneePitch
+    stiffness: 350.0
+    damping: 10.0
+  - pattern: .*HipYaw
+    stiffness: 250.0
+    damping: 8.0
+  - pattern: .*AnklePitch|.*AnkleRoll
+    stiffness: 200.0
+    damping: 6.0
+  - pattern: torsoYaw|torsoPitch|torsoRoll
+    stiffness: 300.0
+    damping: 8.0
+  - pattern: .*ShoulderPitch|.*ShoulderRoll|.*ShoulderYaw
+    stiffness: 150.0
+    damping: 5.0
+  - pattern: .*ElbowPitch|.*ForearmYaw
+    stiffness: 100.0
+    damping: 4.0
+  - pattern: .*WristRoll|.*WristPitch
+    stiffness: 40.0
+    damping: 2.0
+  - pattern: lowerNeckPitch|neckYaw|upperNeckPitch
+    stiffness: 40.0
+    damping: 2.0
+action:
+  type: position_only
+  scale:
+    .*HipRoll: 0.25
+    .*HipPitch: 0.25
+    .*KneePitch: 0.25
+    .*HipYaw: 0.19
+    .*AnklePitch: 0.25625
+    .*AnkleRoll: 0.25625
+    torsoYaw: 0.1417
+    torsoPitch: 0.1417
+    torsoRoll: 0.1417
+    .*ShoulderPitch: 0.25
+    .*ShoulderRoll: 0.25
+    .*ShoulderYaw: 0.25
+    .*ElbowPitch: 0.1625
+    .*ForearmYaw: 0.1625
+    .*WristRoll: 0.0875
+    .*WristPitch: 0.0875
+    lowerNeckPitch: 0.1625
+    neckYaw: 0.1625
+    upperNeckPitch: 0.1625
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 0.5
+- name: ang_vel_xy_l2
+  weight: -0.05
+- name: dof_torques_l2
+  weight: -1.0e-05
+- name: dof_acc_l2
+  weight: -2.5e-07
+- name: action_rate_l2
+  weight: -0.01
+- name: flat_orientation_l2
+  weight: -1.0
+- name: dof_pos_limits
+  weight: -1.0
+- name: termination_penalty
+  weight: -200.0
+- name: feet_air_time_biped
+  weight: 0.25
+  params:
+    threshold: 0.4
+- name: feet_slide
+  weight: -0.25
+termination:
+- contact
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization: basic
+agent:
+  num_envs: 4096
+  max_iterations: 30000
+  learning_rate: 0.001
+  entropy_coef: 0.01
+  hidden_dims: [512, 256, 128]

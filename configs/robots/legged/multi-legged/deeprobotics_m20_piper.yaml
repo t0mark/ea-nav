@@ -1,8 +1,66 @@
+# M20_piper 전용 공식 학습 리포는 없다(DeepRoboticsLab 조직 전체 리포 재확인 완료, 흔적 없음) -
+# 같은 플랫폼인 M20의 공식 리포(DeepRoboticsLab/rl_training, config/wheeled/deeprobotics_m20)에서
+# 검증한 다리(위치제어)/바퀴(속도제어) 분리와 actuator 게인만 그대로 가져왔다. 로봇팔(piper, link7/
+# link8) 관절은 이 리포에 대응 정보가 전혀 없어 액션에 안 넣었다(고정 자세 유지) - foot_body_names에
+# link7|link8이 들어있는 것도 usd 자동 추출 시 팔 말단이 "다리"로 잘못 분류됐을 가능성이 있으나,
+# 이걸 바로잡을 근거(공식 자료)가 없어 그대로 뒀다.
 usd_path: deeprobotics_m20_piper.usd
-morphology_group: quadruped
 base_body_name: base_link
 foot_body_names: fl_wheel|fr_wheel|hl_wheel|hr_wheel|link7|link8
-action_scale: 0.5
 undesired_contact_body_names: fl_knee|fr_knee|gripper_base|hl_knee|hr_knee
-actuator_stiffness: 76.4
-actuator_damping: 1.528
+actuator:
+  type: grouped
+  groups:
+  - pattern: .*hipx_joint|.*hipy_joint|.*knee_joint
+    stiffness: 80.0
+    damping: 2.0
+  - pattern: .*_wheel_joint
+    stiffness: 0.0
+    damping: 0.6
+action:
+  type: position_velocity_mixed
+  position_joints:
+    pattern: .*hipx_joint|.*hipy_joint|.*knee_joint
+    scale: {".*hipx_joint": 0.125, "^(?!.*hipx_joint).*$": 0.25}
+  velocity_joints:
+    pattern: .*_wheel_joint
+    scale: 5.0
+rewards:
+- name: track_lin_vel_xy_exp
+  weight: 1.0
+- name: track_ang_vel_z_exp
+  weight: 0.5
+- name: lin_vel_z_l2
+  weight: -2.0
+- name: ang_vel_xy_l2
+  weight: -0.05
+- name: dof_torques_l2
+  weight: -1.0e-05
+  params:
+    joint_names: .*hipx_joint|.*hipy_joint|.*knee_joint
+- name: dof_acc_l2
+  weight: -2.5e-07
+  params:
+    joint_names: .*hipx_joint|.*hipy_joint|.*knee_joint
+- name: action_rate_l2
+  weight: -0.01
+- name: flat_orientation_l2
+  weight: -1.0
+- name: dof_pos_limits
+  weight: -1.0
+- name: undesired_contacts
+  weight: -1.0
+  params:
+    threshold: 1.0
+termination:
+- name: orientation
+  limit_angle: 0.7
+policy_architecture: mlp
+algorithm: ppo
+domain_randomization: basic
+agent:
+  num_envs: 4096
+  max_iterations: 1500
+  learning_rate: 0.001
+  entropy_coef: 0.01
+  hidden_dims: [512, 256, 128]

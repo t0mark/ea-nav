@@ -1,26 +1,26 @@
 """legged 로봇 RL 보행 학습 환경(ManagerBasedRLEnvCfg) 조립.
 
-로봇마다 별도 파일을 두는 대신(Isaac Lab 예제 방식), configs/robots/legged/{category}/{robot_id}.yaml
-하나로 로봇을 특정해 build_loco_rl_env_cfg()가 환경 설정을 조립한다. 관측/액션/이벤트/종료 조건은
-모든 legged 로봇에 공통이고, 보상만 형태 그룹(quadruped/humanoid)에 따라 rewards.py에서 골라 쓴다.
+로봇마다 별도 파일을 두는 대신, configs/robots/legged/{category}/{robot_id}.yaml 하나로 로봇을 특정해
+build_loco_rl_env_cfg()가 환경 설정을 조립한다. 씬 골격(지형·센서)·관측·명령·커리큘럼은 34종 전부
+공용이고, 관절 구동 모델(actuator)·액션 구성(action)·보상(rewards)·종료조건(termination)·도메인
+랜덤화(domain_randomization)만 로봇 yaml이 직접 선언한 축 값대로 scripts/sim/controller/legged/rl/
+{actuators,actions,rewards,terminations,domain_randomization}/ 레지스트리에서 조립한다 - 공개 RL
+리포지토리들을 전수 대조한 결과, 이 5개 축이 로봇마다 실제로 갈리는 지점이었고 반대로 씬·관측·명령·
+커리큘럼은 로봇 타입과 무관하게 전부 동일했다.
 """
 
 from __future__ import annotations
 
 import math
 import re
-from dataclasses import MISSING, dataclass, field
+from dataclasses import MISSING
 from pathlib import Path
 
-import yaml
-
 import isaaclab.sim as sim_utils
-from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.envs import mdp as core_mdp
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
-from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
@@ -31,62 +31,39 @@ from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
-from scripts.sim.controller.legged.rl.rewards import HumanoidRewardsCfg, QuadrupedRewardsCfg
+from scripts.sim.controller.legged.rl import actions as action_axis
+from scripts.sim.controller.legged.rl import actuators as actuator_axis
+from scripts.sim.controller.legged.rl import domain_randomization as domain_randomization_axis
+from scripts.sim.controller.legged.rl import rewards as reward_axis
+from scripts.sim.controller.legged.rl import terminations as termination_axis
+from scripts.sim.controller.legged.rl.robot_profile import RobotProfile
 from scripts.sim.env.robot_spawn import ground_clearance
 from scripts.sim.env.rl import build_rl_terrain_importer_cfg, promote_terrain_levels_by_travel_distance
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _USD_ROOT = _REPO_ROOT / "data" / "sim" / "usd" / "real_robot" / "legged"
 _SIM_RL_CONFIG_PATH = _REPO_ROOT / "configs" / "sim_rl.yaml"
-_ROBOT_CONFIG_ROOT = _REPO_ROOT / "configs" / "robots" / "legged"
 
 
-@dataclass
-class LeggedRobotCfg:
-    """configs/robots/legged/{category}/{robot_id}.yaml 한 장에 대응하는 로봇별 RL 파라미터."""
+def _build_joint_pos_cfg(default_joint_pos: dict[str, float], is_complete: bool) -> dict[str, float]:
+    """관절 기본 자세 딕셔너리를 만든다. default_joint_pos가 어떤 의미인지는 robot yaml이 미리
+    선언해 둔 사실이라(RobotProfile.default_joint_pos_complete), 여기서는 그 선언을 그대로 따를
+    뿐 usd를 다시 열어 추론하지 않는다 - usd 구조 분석은 usd_export_config.py의 책임이다.
 
-    usd_path: str
-    morphology_group: str
-    base_body_name: str
-    foot_body_names: str
-    action_scale: float = 0.5
-    undesired_contact_body_names: str | None = None
-    default_joint_pos: dict[str, float] = field(default_factory=dict)
-    # USD에 authored된 PD 게인은 URDF->USD 변환기가 넣은 "정지 유지용" 기본값이라 RL 학습에 못 쓴다
-    # (관측됨: unitree_go2 - stiffness 1e7, damping 1e5, 공식 값(25, 0.5)의 40만 배) - 그래서
-    # ImplicitActuatorCfg에 usd 값을 그대로 안 쓰고, usd_export_config.py가 관절 effort 한계에서
-    # 계산한 값을 쓴다. 여기 25.0/0.5는 그 계산이 없을 때(구버전 config)의 안전한 기본값이다.
-    actuator_stiffness: float = 25.0
-    actuator_damping: float = 0.5
-
-
-def load_legged_robot_cfg(category: str, robot_id: str) -> LeggedRobotCfg:
-    """configs/robots/legged/{category}/{robot_id}.yaml을 읽어 LeggedRobotCfg로 변환한다."""
-    yaml_path = _ROBOT_CONFIG_ROOT / category / f"{robot_id}.yaml"
-    with open(yaml_path) as f:
-        raw = yaml.safe_load(f)
-    return LeggedRobotCfg(
-        usd_path=raw["usd_path"],
-        morphology_group=raw["morphology_group"],
-        base_body_name=raw["base_body_name"],
-        foot_body_names=raw["foot_body_names"],
-        action_scale=raw.get("action_scale", 0.5),
-        undesired_contact_body_names=raw.get("undesired_contact_body_names"),
-        default_joint_pos=raw.get("default_joint_pos") or {},
-        actuator_stiffness=raw.get("actuator_stiffness", 25.0),
-        actuator_damping=raw.get("actuator_damping", 0.5),
-    )
-
-
-def _build_joint_pos_cfg(default_joint_pos: dict[str, float]) -> dict[str, float]:
-    """0.0을 기본값으로 하되, 리밋을 벗어나 override가 필요한 관절만 정확한 이름으로 덮어쓴다.
-
-    와일드카드(".*")와 정확한 관절 이름을 같은 딕셔너리에 같이 쓰면 "패턴 두 개에 매칭" 에러가
-    나므로, override한 이름을 제외한 나머지에만 적용되는 부정 전방탐색 정규식을 와일드카드 대신
-    쓴다(scripts/sim/env/robot_spawn.py의 spawn_robot_safely와 동일한 패턴).
+    - is_complete=False(기본값): default_joint_pos는 "0이 리밋을 벗어나는 관절만" 담은 override
+      목록이다(usd_export_config.py가 usd 리밋에서 자동 계산). 이 경우 나머지 관절은 전부 0.0이어야
+      하므로, override한 이름을 제외한 나머지에만 적용되는 부정 전방탐색 정규식을 와일드카드로 쓴다
+      (와일드카드 ".*"와 정확한 이름을 같은 딕셔너리에 같이 쓰면 "패턴 두 개에 매칭" 에러가 나서
+      단순 와일드카드는 못 쓴다).
+    - is_complete=True: default_joint_pos가 이미 로봇의 관절 전체에 대한 기본 자세다(예: go2/go1 -
+      Isaac Lab 공식 UNITREE_GO2_CFG처럼 12관절 전부를 직접 나열). 이 경우 위 와일드카드를 추가하면
+      매칭할 관절이 하나도 안 남아 Isaac Lab이 "패턴이 아무 것도 매칭 안 함" 에러를 던지므로,
+      override 목록을 그대로 쓴다.
     """
     if not default_joint_pos:
         return {".*": 0.0}
+    if is_complete:
+        return dict(default_joint_pos)
     excluded = "|".join(re.escape(name) for name in default_joint_pos)
     return {f"^(?!({excluded})$).*": 0.0, **default_joint_pos}
 
@@ -131,15 +108,6 @@ class CommandsCfg:
 
 
 @configclass
-class ActionsCfg:
-    """모든 관절을 위치 목표로 구동 - 스케일은 로봇 config의 action_scale로 build_loco_rl_env_cfg()가 지정."""
-
-    joint_pos = core_mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=[".*"], scale=0.5, use_default_offset=True
-    )
-
-
-@configclass
 class ObservationsCfg:
     """정책 관측 - 고유 감각(proprioception) + height scan(로컬 지형 굴곡)."""
 
@@ -170,72 +138,6 @@ class ObservationsCfg:
 
 
 @configclass
-class EventCfg:
-    """도메인 랜덤화 - sim-to-real 격차를 줄이기 위한 마찰·질량·초기 상태·외란 이벤트."""
-
-    physics_material = EventTerm(
-        func=core_mdp.randomize_rigid_body_material,
-        mode="startup",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "static_friction_range": (0.8, 0.8),
-            "dynamic_friction_range": (0.6, 0.6),
-            "restitution_range": (0.0, 0.0),
-            "num_buckets": 64,
-        },
-    )
-    add_base_mass = EventTerm(
-        func=core_mdp.randomize_rigid_body_mass,
-        mode="startup",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="base"),  # build_loco_rl_env_cfg()에서 실제 이름으로 교체
-            "mass_distribution_params": (-1.0, 1.0),
-            "operation": "add",
-        },
-    )
-    reset_base = EventTerm(
-        func=core_mdp.reset_root_state_uniform,
-        mode="reset",
-        params={
-            "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
-            "velocity_range": {
-                "x": (-0.5, 0.5),
-                "y": (-0.5, 0.5),
-                "z": (-0.5, 0.5),
-                "roll": (-0.5, 0.5),
-                "pitch": (-0.5, 0.5),
-                "yaw": (-0.5, 0.5),
-            },
-        },
-    )
-    reset_robot_joints = EventTerm(
-        func=core_mdp.reset_joints_by_scale,
-        mode="reset",
-        params={"position_range": (0.5, 1.5), "velocity_range": (0.0, 0.0)},
-    )
-    push_robot = EventTerm(
-        func=core_mdp.push_by_setting_velocity,
-        mode="interval",
-        interval_range_s=(10.0, 15.0),
-        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
-    )
-
-
-@configclass
-class TerminationsCfg:
-    """시간 초과 종료와, 몸통이 지면에 닿는 낙상 종료."""
-
-    time_out = DoneTerm(func=core_mdp.time_out, time_out=True)
-    base_contact = DoneTerm(
-        func=core_mdp.illegal_contact,
-        params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="base"),  # build_loco_rl_env_cfg()에서 교체
-            "threshold": 1.0,
-        },
-    )
-
-
-@configclass
 class CurriculumCfg:
     """지형 난이도 승급·강등 - 판단 로직은 scripts/sim/env/rl.py에 둔다(씬 레벨 동작이라는 이유)."""
 
@@ -244,15 +146,20 @@ class CurriculumCfg:
 
 @configclass
 class LocoRLEnvCfg(ManagerBasedRLEnvCfg):
-    """legged 로봇 보행 정책 학습용 환경 설정."""
+    """legged 로봇 보행 정책 학습용 환경 설정.
+
+    actions/rewards/terminations/events는 로봇마다 타입 자체가 달라(선택한 축에 따라 필드 구성이
+    다름) 여기서 고정 기본값을 못 둔다 - MISSING으로 선언만 해두고 build_loco_rl_env_cfg()가 반드시
+    채운다(scene.robot과 동일한 패턴).
+    """
 
     scene: LocoSceneCfg = LocoSceneCfg(num_envs=4096, env_spacing=2.5)
     observations: ObservationsCfg = ObservationsCfg()
-    actions: ActionsCfg = ActionsCfg()
+    actions: object = MISSING
     commands: CommandsCfg = CommandsCfg()
-    rewards: QuadrupedRewardsCfg = QuadrupedRewardsCfg()
-    terminations: TerminationsCfg = TerminationsCfg()
-    events: EventCfg = EventCfg()
+    rewards: object = MISSING
+    terminations: object = MISSING
+    events: object = MISSING
     curriculum: CurriculumCfg = CurriculumCfg()
 
     def __post_init__(self) -> None:
@@ -281,31 +188,34 @@ def build_loco_rl_env_cfg(
 ) -> LocoRLEnvCfg:
     """robot_id 하나에 대해 완전히 조립된 LocoRLEnvCfg를 만든다 - tools/03_controller_rl.py의 유일한 진입점.
 
-    관절 PD 게인은 USD authored 값을 쓰지 않는다 - URDF->USD 변환기가 넣은 값은 정지 자세를 딱딱하게
-    붙잡아두기 위한 것이라 RL 학습에 맞지 않을 정도로 크다(관측됨: unitree_go2 stiffness 1e7). 대신
-    usd_export_config.py가 관절 effort 한계에서 계산해 config에 저장해 둔 값(robot_cfg의
-    actuator_stiffness/damping)을 쓴다.
+    관절 구동 모델·액션 구성·보상·종료조건·도메인 랜덤화는 RobotProfile이 선언한 축 값대로 각 레지스트리
+    (actuator_axis/action_axis/reward_axis/termination_axis/domain_randomization_axis)에서 조립한다.
 
-    flat_terrain=True면 계단·경사 커리큘럼 지형 대신 평지로 바꾼다 - tools/04_controller_test.py의
-    기본 경로 추종 테스트(ㄱ자 웨이포인트)는 "정책이 이동 명령을 따라가는가"만 wheeled와 동일한
-    조건(평지)으로 확인하는 게 목적이고, 지형 난이도 자체는 학습 커리큘럼에서 이미 검증되므로
-    여기서 또 볼 필요가 없다.
+    flat_terrain=True면 계단·경사 커리큘럼 지형 대신 평지로 바꾼다 - 이건 학습 시점에 로봇마다 고르는
+    축이 아니라, tools/04_controller_test.py가 학습이 끝난 정책의 구동만 확인할 때 쓰는 테스트 전용
+    스위치다(wheeled와 동일한 조건에서 "정책이 이동 명령을 따라가는가"만 보는 게 목적이고, 지형 난이도
+    자체는 학습 커리큘럼에서 이미 검증되므로 테스트에서 또 볼 필요가 없다). 학습 지형은 로봇 종류와
+    무관하게 항상 커리큘럼 rough-terrain 하나로 통일한다 - 이 프로젝트의 목표 자체가 "모든 로봇이
+    동일한 커리큘럼 지형을 통과하는 능력"을 학습시키는 것이라, 로봇마다 학습 지형을 다르게 가져갈
+    이유가 없다.
     """
-    robot_cfg = load_legged_robot_cfg(category, robot_id)
-    usd_path = _USD_ROOT / category / robot_cfg.usd_path
+    profile = RobotProfile.load(category, robot_id)
+    usd_path = _USD_ROOT / category / profile.usd_path
 
     # usd에 저장된 기본 자세 기준 지면 여유 높이 - 안 띄우면 로봇이 지형 표면과 겹친 채로 스폰돼
     # 첫 physics 스텝에서 PhysX가 관통을 강제로 밀어내며 폭발적인 속도가 나온다(관측됨: 스폰 직후
     # ang_vel/lin_vel_z 보상이 물리적으로 불가능한 크기로 튀고 거의 즉시 base_contact 종료됨)
     spawn_height = ground_clearance(usd_path)
 
-    # 공용 골격 위에 이 로봇의 USD·본체 이름·발 이름을 채워 넣는다
     env_cfg = LocoRLEnvCfg()
     env_cfg.scene.num_envs = num_envs
+
     # 다리 관절이 서로 스치는 접촉을 물리적으로 정확히 풀어내려면 velocity iteration이 더 필요하다
     # (관측됨: 기본값으로 두면 "more than 4 velocity iterations" TGS 경고가 뜸) - Isaac Lab 공식
-    # 사족보행/휴머노이드 에셋(A1·Go2·ANYmal·H1·G1)이 전부 쓰는 값을 그대로 따른다
-    solver_velocity_iterations = 4 if robot_cfg.morphology_group == "humanoid" else 0
+    # 사족보행/휴머노이드 에셋(A1·Go2·ANYmal·H1·G1)이 전부 쓰는 값을 그대로 따른다. 이 값은 형태(다리·팔이
+    # 몸통 가까이서 부딪히는 구조인지)에 관한 순수 물리 튜닝값이라, RL 설정 축이 아니라 USD가 놓인
+    # 폴더(category)로 그대로 판단한다.
+    solver_velocity_iterations = 4 if category == "humanoid" else 0
     env_cfg.scene.robot = ArticulationCfg(
         prim_path="{ENV_REGEX_NS}/Robot",
         # activate_contact_sensors=True 필수 - scene.contact_forces(ContactSensor)가 이 로봇의
@@ -329,26 +239,23 @@ def build_loco_rl_env_cfg(
             ),
         ),
         # 관절 기본 자세는 0을 기본으로 쓰되, 그게 리밋을 벗어나는 관절(예: 무릎)만 config의
-        # default_joint_pos(usd_export_config.py가 usd 리밋에서 미리 계산해 둔 값)로 덮어쓴다 -
-        # 안 그러면 ArticulationCfg 검증 단계에서 "기본 자세가 리밋 밖" 예외가 바로 난다
+        # default_joint_pos(usd_export_config.py가 usd 리밋에서 미리 계산해 둔 값)로 덮어쓴다
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, spawn_height), joint_pos=_build_joint_pos_cfg(robot_cfg.default_joint_pos)
+            pos=(0.0, 0.0, spawn_height),
+            joint_pos=_build_joint_pos_cfg(profile.default_joint_pos, profile.default_joint_pos_complete),
         ),
         # 리밋 끝까지 밀어붙이면 PPO가 물리적 하드 리밋에 부딪혀 불안정해지므로 10% 여유를 둔다
-        # (A1/Go2/H1/G1 공식 설정과 동일)
         soft_joint_pos_limit_factor=0.9,
-        actuators={
-            "all_joints": ImplicitActuatorCfg(
-                joint_names_expr=[".*"],
-                stiffness=robot_cfg.actuator_stiffness,
-                damping=robot_cfg.actuator_damping,
-            )
-        },
+        actuators=actuator_axis.build(profile.actuator),
     )
-    env_cfg.scene.height_scanner.prim_path = f"{{ENV_REGEX_NS}}/Robot/{robot_cfg.base_body_name}"
-    env_cfg.actions.joint_pos.scale = robot_cfg.action_scale
-    env_cfg.events.add_base_mass.params["asset_cfg"].body_names = robot_cfg.base_body_name
-    env_cfg.terminations.base_contact.params["sensor_cfg"].body_names = robot_cfg.base_body_name
+    env_cfg.scene.height_scanner.prim_path = f"{{ENV_REGEX_NS}}/Robot/{profile.base_body_name}"
+
+    # 액션·보상·종료조건·도메인 랜덤화는 로봇 yaml이 고른 축 값대로 각 레지스트리가 조립한다
+    env_cfg.actions = action_axis.build(profile.action)
+    env_cfg.rewards = reward_axis.build(profile.rewards, profile)
+    env_cfg.terminations = termination_axis.build(profile.termination, profile)
+    env_cfg.terminations.time_out = DoneTerm(func=core_mdp.time_out, time_out=True)
+    env_cfg.events = domain_randomization_axis.build(profile.domain_randomization, profile)
 
     if flat_terrain:
         env_cfg.scene.terrain = TerrainImporterCfg(
@@ -366,21 +273,5 @@ def build_loco_rl_env_cfg(
         # 평지는 난이도 단계가 없어 지형 커리큘럼 자체가 의미 없다 - 켜둔 채로 두면 이 항목이
         # 참조하는 terrain_generator가 None이라 그대로 에러가 난다
         env_cfg.curriculum.terrain_levels = None
-
-    # 형태 그룹(quadruped/humanoid)에 맞는 보상 세트를 고르고, 로봇별 발/접촉 링크 이름을 채운다
-    if robot_cfg.morphology_group == "humanoid":
-        env_cfg.rewards = HumanoidRewardsCfg()
-        env_cfg.rewards.feet_air_time.params["sensor_cfg"].body_names = robot_cfg.foot_body_names
-        env_cfg.rewards.feet_slide.params["sensor_cfg"].body_names = robot_cfg.foot_body_names
-        env_cfg.rewards.feet_slide.params["asset_cfg"].body_names = robot_cfg.foot_body_names
-    else:
-        env_cfg.rewards = QuadrupedRewardsCfg()
-        env_cfg.rewards.feet_air_time.params["sensor_cfg"].body_names = robot_cfg.foot_body_names
-        if robot_cfg.undesired_contact_body_names:
-            env_cfg.rewards.undesired_contacts.params["sensor_cfg"].body_names = (
-                robot_cfg.undesired_contact_body_names
-            )
-        else:
-            env_cfg.rewards.undesired_contacts = None
 
     return env_cfg
