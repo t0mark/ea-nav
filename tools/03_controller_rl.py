@@ -23,9 +23,16 @@ data/sim/policies/legged/_train_logs/{experiment_name}`. 영상으로 실제 걷
 학습 종료는 max_iterations에 도달하면 끝나는 고정 스텝 방식이다 - rsl_rl의 OnPolicyRunner는 보행이
 "충분히 학습됐는지"를 자동으로 판정하는 기능이 없다(PPO 학습은 통상 이렇다).
 
+멀티 GPU 장비에서 특정 GPU 하나에 학습을 몰아넣고 싶으면 --device cuda:N을 쓴다(AppLauncher 표준
+인자, 이 저장소의 다른 tools/ 스크립트와 동일한 방식) - env(PhysX·렌더링)와 rsl_rl 학습 러너(정책망·
+PPO 옵티마이저) 둘 다 그 GPU로 맞춘다. rsl_rl의 RslRlOnPolicyRunnerCfg.device 기본값이 "cuda:0"으로
+고정돼 있어서(재클론해 확인: isaaclab_rl/rsl_rl/rl_cfg.py) --device만으로는 env만 옮겨가고 러너는
+그대로 cuda:0에 남는 문제가 있었다 - agent_cfg.build_agent_cfg()에 device를 명시적으로 넘겨 고쳤다.
+
 사용법:
     /workspace/isaaclab/isaaclab.sh -p tools/03_controller_rl.py --robot-id unitree_go2
     /workspace/isaaclab/isaaclab.sh -p tools/03_controller_rl.py --robot-id unitree_g1
+    /workspace/isaaclab/isaaclab.sh -p tools/03_controller_rl.py --robot-id unitree_g1 --device cuda:1
 """
 
 import argparse
@@ -105,7 +112,7 @@ def main() -> None:
     env = ManagerBasedRLEnv(cfg=env_cfg)
 
     experiment_name = f"{robot_type}_{args_cli.robot_id}"
-    agent_cfg = build_agent_cfg(profile, experiment_name)
+    agent_cfg = build_agent_cfg(profile, experiment_name, args_cli.device)
 
     # PPO 러너 조립 - 로그는 정책 산출물과 분리해 별도 학습 로그 디렉터리에 남긴다
     vec_env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
