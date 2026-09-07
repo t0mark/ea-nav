@@ -8,11 +8,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import torch
+
 from isaaclab.envs import mdp as core_mdp
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 
 if TYPE_CHECKING:
+    from isaaclab.envs import ManagerBasedRLEnv
+
     from ..robot_profile import RobotProfile
 
 
@@ -51,3 +55,19 @@ def dof_vel_l2(weight: float, profile: RobotProfile, joint_names: str = ".*", **
 def action_rate_l2(weight: float, profile: RobotProfile, **_unused) -> RewTerm:
     """연속된 두 액션 사이의 변화량 페널티 - 관절이 떨리는(jitter) 것을 억제."""
     return RewTerm(func=core_mdp.action_rate_l2, weight=weight)
+
+
+def _joint_power(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """|관절 속도 x 관절 토크|의 합 - 실제 소모 동력에 대한 페널티(DeepRoboticsLab/rl_training 원본
+    joint_power 그대로, 지형 난이도 커리큘럼 배율은 우리 쪽에 그 서브시스템이 없어 뺐다)."""
+    asset = env.scene[asset_cfg.name]
+    joint_vel = asset.data.joint_vel[:, asset_cfg.joint_ids]
+    applied_torque = asset.data.applied_torque[:, asset_cfg.joint_ids]
+    return torch.sum(torch.abs(joint_vel * applied_torque), dim=1)
+
+
+def joint_power(weight: float, profile: RobotProfile, joint_names: str = ".*", **_unused) -> RewTerm:
+    """관절 소모 동력 페널티 - dof_torques_l2(토크 제곱)와 달리 속도까지 곱해 실제 일량에 비례한다."""
+    return RewTerm(
+        func=_joint_power, weight=weight, params={"asset_cfg": SceneEntityCfg("robot", joint_names=joint_names)}
+    )

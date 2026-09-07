@@ -2,7 +2,7 @@
 # - sim   : Isaac Lab 2.3.0 (URDF -> USD 변환, 지형·구조물, 롤아웃)
 # - train : PyTorch 학습·데이터 처리 (Dockerfile.train)
 # - utils : 기타 CPU 작업 - URDF 생성·검증, 데이터 수집 등 (Dockerfile.utils)
-# 공통 규칙: 코드는 /workspace/eatrav, 대용량 산출물은 /data/EA-Trav
+# 공통 규칙: 코드는 /workspace/eatrav, 대용량 산출물은 /data/ea-trav
 
 name: eatrav
 
@@ -35,10 +35,10 @@ services:
     volumes:
       - ../:/workspace/eatrav
       - /home/jairlab/data:/data
-      - /home/jairlab/data/EA-Trav/isaac-cache/kit:/isaac-sim/kit/cache
-      - /home/jairlab/data/EA-Trav/isaac-cache/ov:/root/.cache/ov
-      - /home/jairlab/data/EA-Trav/isaac-cache/glcache:/root/.cache/nvidia/GLCache
-      - /home/jairlab/data/EA-Trav/isaac-cache/computecache:/root/.nv/ComputeCache
+      - /home/jairlab/data/ea-trav/isaac-cache/kit:/isaac-sim/kit/cache
+      - /home/jairlab/data/ea-trav/isaac-cache/ov:/root/.cache/ov
+      - /home/jairlab/data/ea-trav/isaac-cache/glcache:/root/.cache/nvidia/GLCache
+      - /home/jairlab/data/ea-trav/isaac-cache/computecache:/root/.nv/ComputeCache
     environment:
       - ACCEPT_EULA=Y
       - PRIVACY_CONSENT=Y

@@ -1,6 +1,7 @@
 # fan-ziqi/robot_lab 공식 리포(config/quadruped/unitree_b2/rough_env_cfg.py + agents/rsl_rl_ppo_cfg.py
 # + assets/unitree.py)를 재클론해 재검증 후 반영했다. contact_forces·feet_contact_without_cmd·
-# joint_power·upward·joint_pos_penalty·feet_height_body는 robot_lab 전용 커스텀 보상 함수라 우리
+# joint_power·upward는 이후 레지스트리에 구현해 반영함(실측: upward 없이 학습시켰더니 뒤집힌 채
+# 정지하는 정책으로 수렴 - model_850 비디오로 확인). joint_pos_penalty·feet_height_body는 아직
 # 레지스트리에 없어 뺐다.
 usd_path: unitree_b2.usd
 base_body_name: base_link
@@ -34,6 +35,14 @@ rewards:
   weight: -2.0
 - name: undesired_contacts
   weight: -1.0
+- name: contact_forces
+  weight: -1.5e-04
+- name: joint_power
+  weight: -1.0e-05
+- name: feet_contact_without_cmd
+  weight: 0.1
+- name: upward
+  weight: 3.0
 - name: joint_mirror
   weight: -0.05
   params:
@@ -41,11 +50,16 @@ rewards:
     - [FR_(hip|thigh|calf).*, RL_(hip|thigh|calf).*]
     - [FL_(hip|thigh|calf).*, RR_(hip|thigh|calf).*]
 default_joint_pos:
-  FL_calf_joint: -93.10563
-  FR_calf_joint: -93.10563
-  RL_calf_joint: -93.10563
-  RR_calf_joint: -93.10563
-termination: []  # 원본이 illegal_contact 종료조건 자체를 꺼둔다
+  FL_calf_joint: -1.625
+  FR_calf_joint: -1.625
+  RL_calf_joint: -1.625
+  RR_calf_joint: -1.625
+termination:
+- name: orientation
+  limit_angle: 0.7
+# 원본은 illegal_contact 종료조건만 끄고, upward 보상(위에 추가함)만으로 낙상을 억제한다.
+# 우리는 upward 보상을 추가한 뒤에도 orientation 종료조건을 함께 둔다 - 둘 다 같은 방향(뒤집힘 억제)
+# 이라 상충하지 않고, 종료조건이 있으면 나쁜 자세에서 더 빨리 에피소드를 끝내 학습이 더 안정적이다.
 policy_architecture: mlp
 algorithm: ppo
 domain_randomization: basic

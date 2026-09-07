@@ -540,6 +540,11 @@ def _compute_default_joint_overrides(stage, root_prim_path: str) -> dict[str, fl
     포함하지 않게 설계된 관절이 있다(관측됨: unitree_go2의 calf_joint 리밋이 [-2.723, -0.838]로 전부
     음수). 중앙값은 "물리적으로 유효하다"만 보장하는 값이고, 실제로 자연스럽게 서는 자세는 학습
     (reset_robot_joints 이벤트의 랜덤 스케일 + PPO)이 그 위에서 찾아가므로 이걸로 충분하다.
+
+    UsdPhysics.RevoluteJoint의 lower/upper limit은 USD Physics 스키마 규약상 도(degree) 단위로
+    authored되어 있는데, ArticulationCfg.init_state.joint_pos(및 이 값을 검증하는 PhysX 쪽 리밋)는
+    라디안을 기대한다 - 변환 없이 그대로 쓰면 값이 57배(180/pi)가량 부풀려져 리밋을 한참 벗어난다
+    (관측됨: unitree_b2/go2w calf_joint, deeprobotics_lite3 knee_joint).
     """
     from pxr import Usd, UsdPhysics
 
@@ -552,7 +557,7 @@ def _compute_default_joint_overrides(stage, root_prim_path: str) -> dict[str, fl
         lower_attr, upper_attr = joint.GetLowerLimitAttr(), joint.GetUpperLimitAttr()
         if not lower_attr.HasAuthoredValue() or not upper_attr.HasAuthoredValue():
             continue
-        lower, upper = lower_attr.Get(), upper_attr.Get()
+        lower, upper = math.radians(lower_attr.Get()), math.radians(upper_attr.Get())
         if lower <= 0.0 <= upper:
             continue
         overrides[prim.GetName()] = round((lower + upper) / 2.0, 5)

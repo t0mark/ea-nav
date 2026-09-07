@@ -21,7 +21,12 @@ from .robot_profile import RobotProfile
 
 
 def build_agent_cfg(profile: RobotProfile, experiment_name: str, device: str) -> RslRlOnPolicyRunnerCfg:
-    """profile.policy_architecture/algorithm으로 액터-크리틱+알고리즘 설정을 만들고 러너 설정으로 묶는다."""
+    """profile.policy_architecture/algorithm으로 액터-크리틱+알고리즘 설정을 만들고 러너 설정으로 묶는다.
+
+    device를 env cfg와 같은 값으로 명시하지 않으면 RslRlBaseRunnerCfg 기본값(cuda:0)으로 고정돼,
+    시뮬레이션은 지정한 GPU에서 돌면서 정책망만 항상 GPU 0에서 도는 불일치가 생긴다 - 여러 GPU에
+    동시에 학습을 나눠 돌릴 때 모든 정책망 연산이 GPU 0으로 몰리는 원인이 된다.
+    """
     return RslRlOnPolicyRunnerCfg(
         device=device,
         num_steps_per_env=profile.agent.get("num_steps_per_env", 24),

@@ -29,10 +29,10 @@ rewards:
   params:
     threshold: 0.5
 default_joint_pos:
-  FL_calf_joint: -103.49999
-  FR_calf_joint: -103.49999
-  RL_calf_joint: -103.49999
-  RR_calf_joint: -103.49999
+  FL_calf_joint: -1.80642
+  FR_calf_joint: -1.80642
+  RL_calf_joint: -1.80642
+  RR_calf_joint: -1.80642
 termination:
 - contact
 policy_architecture: mlp

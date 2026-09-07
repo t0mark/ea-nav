@@ -1,13 +1,13 @@
 # IsaacLab 공식(anymal_d/rough_env_cfg.py, base는 velocity_env_cfg.py 그대로)을 재클론해 재검증
-# 후 반영했다. foot_body_names가 SHANK로 잘못돼 있었고 게다가 collision이 아예 없는
-# inspection_payload_tilt(카메라 짐벌 부품)까지 "발"로 잘못 섞여 있던 것을 로컬 URDF 대조로 확인해
-# FOOT으로 고치고 payload는 뺐다. undesired_contact_body_names도 THIGH(collision 없음)를
-# thigh_fixed(실제 collision 프록시)로 고쳤다(inspection_payload_pan은 실제로 collision이 있어
-# 그대로 유지). damping도 legged_gym 실측값(2.0)으로 맞췄다. flat_orientation_l2/dof_pos_limits는
-# IsaacLab rough 기본값이 0.0(비활성)이라 제거.
+# 후 반영했다. undesired_contact_body_names도 THIGH(collision 없음)를 thigh_fixed(실제 collision
+# 프록시)로 고쳤다(inspection_payload_pan은 실제로 collision이 있어 그대로 유지). damping도
+# legged_gym 실측값(2.0)으로 맞췄다. flat_orientation_l2/dof_pos_limits는 IsaacLab rough
+# 기본값이 0.0(비활성)이라 제거.
+# foot_body_names는 SHANK다 - anymal_b와 마찬가지로 이 USD에는 별도 FOOT 링크가 없다(실측:
+# ManagerBasedRLEnv 생성 시 "Available strings"에 HIP/THIGH/SHANK만 나열됨).
 usd_path: anybotics_anymal_d.usd
 base_body_name: base
-foot_body_names: LF_FOOT|LH_FOOT|RF_FOOT|RH_FOOT
+foot_body_names: LF_SHANK|LH_SHANK|RF_SHANK|RH_SHANK
 undesired_contact_body_names: LF_thigh_fixed|LH_thigh_fixed|RF_thigh_fixed|RH_thigh_fixed|inspection_payload_pan
 actuator:
   type: simple

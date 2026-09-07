@@ -1,9 +1,13 @@
 # DeepRobotics 공식 리포(DeepRoboticsLab/rl_training) rough_env_cfg.py + assets/deeprobotics.py
 # 세팅을 재클론해 재검증 후 반영했다(actuator 24.0/0.48 -> 30.0/1.0로 수정, termination에서
-# illegal_contact 종료조건 제거 - 원본이 꺼둠). phase_foot_trajectory_exp·feet_air_time_lin_xy/
-# ang_z·joint_power·contact_forces·feet_contact_without_cmd는 이 리포 전용 커스텀 보상 함수라
-# 우리 rewards/ 레지스트리에 없어 뺐다 - 나머지(속도추종·자세·발 접촉·게이트·좌우대칭)는 전부 실제
-# weight 그대로 반영했다.
+# illegal_contact 종료조건 제거 - 원본이 꺼둠). feet_air_time_lin_xy·feet_air_time_ang_z_lite3·
+# joint_power·contact_forces·feet_contact_without_cmd는 이후 레지스트리에 구현해 반영했다
+# (지형 난이도 커리큘럼에 따른 가중치 스케일링은 우리 쪽에 그 서브시스템이 없어 제외 - 원본은 이
+# 배율 때문에 학습 초반엔 이 항목들 영향이 작다가 점점 커지는데, 우리는 처음부터 전체 weight로
+# 적용된다). phase_foot_trajectory_exp(베지어 곡선 기반 발 궤적 추종)는 구현 규모가 커서 아직
+# 뺐다 - 나머지(속도추종·자세·발 접촉·게이트·좌우대칭)는 전부 실제 weight 그대로 반영했다.
+# (실측: 위 보상들이 빠진 채로 학습시켰다가 주저앉는 정책(model_400) -> orientation 종료조건만
+# 추가해 재시작했다가 이번엔 학습 발산(PPO std NaN, iter ~200)으로 두 번 실패했다.)
 usd_path: deeprobotics_lite3.usd
 base_body_name: TORSO
 foot_body_names: FL_FOOT|FR_FOOT|HL_FOOT|HR_FOOT
@@ -40,6 +44,16 @@ rewards:
     target_height: 0.55
 - name: undesired_contacts
   weight: -0.5
+- name: contact_forces
+  weight: -0.1
+- name: joint_power
+  weight: -8.0e-04
+- name: feet_contact_without_cmd
+  weight: 0.1
+- name: feet_air_time_lin_xy
+  weight: 5.0
+- name: feet_air_time_ang_z_lite3
+  weight: 5.0
 - name: feet_slide
   weight: -0.05
 - name: stand_still
@@ -67,11 +81,18 @@ rewards:
   params:
     joint_names: .*_Knee_joint
 default_joint_pos:
-  FL_Knee_joint: 94.9964
-  FR_Knee_joint: 94.9964
-  HL_Knee_joint: 94.9964
-  HR_Knee_joint: 94.9964
-termination: []  # 원본이 illegal_contact 종료조건 자체를 꺼둔다(전도는 보상 페널티로만 다룸)
+  FL_Knee_joint: 1.658
+  FR_Knee_joint: 1.658
+  HL_Knee_joint: 1.658
+  HR_Knee_joint: 1.658
+termination:
+- name: orientation
+  limit_angle: 0.7
+# 원본은 illegal_contact 종료조건을 꺼두고 전도를 보상 페널티(우리 레지스트리에 없는
+# phase_foot_trajectory_exp 등 게이트 형성 보상과 함께)로만 다루는데, 그 보상들이 빠진 채
+# termination까지 꺼두면 정책이 넘어진 자세에서 벗어날 압력이 전혀 없어 주저앉는 채로 수렴한다
+# (실측: model_400에서 다리를 벌린 채 주저앉아 정지) - deeprobotics_m20과 같은 orientation
+# 종료조건으로 대체한다.
 policy_architecture: mlp
 algorithm: ppo
 domain_randomization:

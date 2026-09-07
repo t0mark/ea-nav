@@ -33,6 +33,10 @@ PPO 옵티마이저) 둘 다 그 GPU로 맞춘다. rsl_rl의 RslRlOnPolicyRunner
     /workspace/isaaclab/isaaclab.sh -p tools/03_controller_rl.py --robot-id unitree_go2
     /workspace/isaaclab/isaaclab.sh -p tools/03_controller_rl.py --robot-id unitree_g1
     /workspace/isaaclab/isaaclab.sh -p tools/03_controller_rl.py --robot-id unitree_g1 --device cuda:1
+
+    # 학습 발산 등으로 중단됐을 때 마지막 체크포인트에서 이어학습
+    /workspace/isaaclab/isaaclab.sh -p tools/03_controller_rl.py --robot-id unitree_b2 \
+        --resume-from data/sim/policies/legged/_train_logs/multi-legged_unitree_b2/model_1350.pt
 """
 
 import argparse
@@ -49,6 +53,13 @@ parser = argparse.ArgumentParser(description="legged 로봇 RL 보행 정책 학
 parser.add_argument("--robot-id", type=str, required=True, help="data/sim/usd/real_robot/legged/ 안의 robot_id")
 parser.add_argument("--num-envs", type=int, default=None, help="병렬 env 수 (생략 시 로봇 yaml의 agent.num_envs)")
 parser.add_argument("--max-iterations", type=int, default=None, help="학습 반복 횟수 (생략 시 로봇 yaml의 agent.max_iterations)")
+parser.add_argument(
+    "--resume-from",
+    type=str,
+    default=None,
+    help="처음부터가 아니라 이 체크포인트(_train_logs/{experiment_name}/model_N.pt)에서 이어서 학습한다"
+    " - 학습 발산 등으로 중단됐을 때 마지막 정상 체크포인트부터 재개하는 용도.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, _ = parser.parse_known_args()
 args_cli.headless = True
@@ -112,7 +123,7 @@ def main() -> None:
     env = ManagerBasedRLEnv(cfg=env_cfg)
 
     experiment_name = f"{robot_type}_{args_cli.robot_id}"
-    agent_cfg = build_agent_cfg(profile, experiment_name, args_cli.device)
+    agent_cfg = build_agent_cfg(profile, experiment_name, device=args_cli.device)
 
     # PPO 러너 조립 - 로그는 정책 산출물과 분리해 별도 학습 로그 디렉터리에 남긴다
     vec_env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
@@ -120,10 +131,22 @@ def main() -> None:
     runner = OnPolicyRunner(vec_env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
 
     max_iterations = profile.agent["max_iterations"]
-    print(f"[controller_rl] 학습 시작 - max_iterations={max_iterations} (헤드리스, 렌더링 없음)")
+    if args_cli.resume_from is not None:
+        # OnPolicyRunner.load()가 current_learning_iteration을 체크포인트 값으로 채운다 - learn()의
+        # num_learning_iterations는 "총 목표"가 아니라 "이번 호출에서 더 돌릴 횟수"라서, 남은
+        # 횟수(max_iterations - current_learning_iteration)를 직접 계산해 넘겨야 목표를 넘기지 않는다.
+        runner.load(args_cli.resume_from)
+        remaining_iterations = max_iterations - runner.current_learning_iteration
+        print(
+            f"[controller_rl] {args_cli.resume_from}에서 이어학습 - "
+            f"iteration {runner.current_learning_iteration} -> {max_iterations} (남은 {remaining_iterations}회)"
+        )
+    else:
+        remaining_iterations = max_iterations
+        print(f"[controller_rl] 학습 시작 - max_iterations={max_iterations} (헤드리스, 렌더링 없음)")
     print(f"[controller_rl] 진행 상황: tensorboard --logdir {log_dir}")
     try:
-        runner.learn(num_learning_iterations=max_iterations, init_at_random_ep_len=True)
+        runner.learn(num_learning_iterations=remaining_iterations, init_at_random_ep_len=True)
     except RuntimeError as exc:
         # PPO가 발산하면(보상 폭주 -> 가치함수 발산 -> 정책 표준편차 NaN) rsl_rl이 이 시점에서
         # RuntimeError를 던진다 - 정책을 내보내지 않고 즉시 멈춰 GPU 시간을 더 낭비하지 않는다.

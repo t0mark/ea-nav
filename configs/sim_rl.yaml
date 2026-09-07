@@ -1,15 +1,31 @@
-# RL 학습용 커리큘럼 지형 구성
-# 시각 검증용 configs/sim_terrain.yaml과 파서(scripts/sim/env/terrain.py)는 동일하게 재사용하지만,
-# curriculum: true로 행(row)마다 난이도가 오름차순이 되게 하고, 그 승급·강등 판단은
+# RL 학습용 커리큘럼 지형 구성.
+#
+# 기반은 Isaac Lab 공식 ROUGH_TERRAINS_CFG(isaaclab.terrains.config.rough)를 재클론해 그대로
+# 반영한 6종 지형이고, 여기에 parkour_step/parkour_hurdle 2종을 추가했다. 이 둘은 연속 계단이
+# 아니라 "단일 장애물 하나 - 평지 회복 구간"을 반복하는 구조로, embodiment-aware traversability
+# 목표(각 로봇이 넘을 수 있는 최대 단차)에 맞춰 Extreme Parkour(ICRA 2024, chengxuxin/
+# extreme-parkour)의 지형 생성 방식을 참고해 scripts/sim/env/terrain/parkour/ 에 직접 구현했다.
+#
+# 시각 검증용 configs/sim_terrain.yaml과 파서(scripts/sim/env/terrain/generator_cfg.py)는 동일하게
+# 재사용하지만, curriculum: true로 행(row)마다 난이도가 오름차순이 되게 하고, 그 승급·강등 판단은
 # scripts/sim/env/rl.py의 promote_terrain_levels_by_travel_distance()가 담당한다.
+#
+# 실측: 이 yaml을 자체 구성(4종 계단/경사만, border_width 5.0, 시작 난이도 레벨 0)으로 뒀을 때
+# unitree_go2가 iter 200 근처에서 보상이 정점을 찍은 뒤 주저앉는 채로 무너졌다. 원인은 max_init_
+# terrain_level=0(전 env가 똑같이 가장 쉬운 지형에서 출발)으로 인해 많은 env가 비슷한 시점에
+# 한꺼번에 어려운 지형으로 승급하는 "난이도 절벽"이 생긴 것으로 추정 - Isaac Lab 공식
+# scripts/reinforcement_learning/rsl_rl/train.py로 이 로봇의 공식 태스크(Isaac-Velocity-Rough-
+# Unitree-Go2-v0, max_init_terrain_level=5)를 그대로 돌려보니 iter 1500까지 안정적으로 학습됐다
+# (재현 확인됨) - 그래서 num_rows=10, max_init_terrain_level=5(rl.py)는 공식값을 그대로 유지하고,
+# 그 안의 타입 구성만 파쿠르 지형을 포함하도록 확장했다.
 
 seed: 42
 curriculum: true             # 행마다 난이도 오름차순 - 로봇 성능에 따라 승급/강등 (env/rl.py 참고)
 
 size: [8.0, 8.0]
-border_width: 5.0
-num_rows: 10                  # 난이도 단계를 세분화 - 낮은 단차/완만한 경사부터 최대치까지 10단계
-num_cols: 20                  # 4가지 서브 지형 타입이 각 열에 고르게 섞이도록 시각 검증용보다 크게
+border_width: 20.0
+num_rows: 10
+num_cols: 20
 
 horizontal_scale: 0.1
 vertical_scale: 0.005
@@ -17,31 +33,57 @@ slope_threshold: 0.75
 color_scheme: height
 
 sub_terrains:
-  pyramid_stairs:              # 오르막 계단 - row 0은 연석 수준(2cm)에 가까워 사실상 평지 보행 학습부터 시작
+  pyramid_stairs:              # 오르막 계단
     type: mesh_pyramid_stairs
-    proportion: 0.25
-    step_height_range: [0.02, 0.25]
+    proportion: 0.15
+    step_height_range: [0.05, 0.23]
     step_width: 0.3
-    platform_width: 2.0
+    platform_width: 3.0
     border_width: 1.0
     holes: false
   pyramid_stairs_inv:          # 내리막 계단
     type: mesh_pyramid_stairs_inv
-    proportion: 0.25
-    step_height_range: [0.02, 0.25]
+    proportion: 0.15
+    step_height_range: [0.05, 0.23]
     step_width: 0.3
-    platform_width: 2.0
+    platform_width: 3.0
     border_width: 1.0
     holes: false
-  pyramid_slope:                # 오르막 경사 - row 0은 거의 평지, row 9는 tan(35도)
+  boxes:                       # 무작위 격자 요철
+    type: mesh_random_grid
+    proportion: 0.15
+    grid_width: 0.45
+    grid_height_range: [0.05, 0.2]
+    platform_width: 2.0
+  random_rough:                 # 무작위 잔거친면
+    type: hf_random_uniform
+    proportion: 0.15
+    noise_range: [0.02, 0.10]
+    noise_step: 0.02
+    border_width: 0.25
+  hf_pyramid_slope:              # 오르막 경사
     type: hf_pyramid_slope
-    proportion: 0.25
-    slope_range: [0.0, 0.7]
+    proportion: 0.1
+    slope_range: [0.0, 0.4]
     platform_width: 2.0
     border_width: 0.25
-  pyramid_slope_inv:            # 내리막 경사
+  hf_pyramid_slope_inv:          # 내리막 경사
     type: hf_pyramid_slope_inv
-    proportion: 0.25
-    slope_range: [0.0, 0.7]
+    proportion: 0.1
+    slope_range: [0.0, 0.4]
     platform_width: 2.0
     border_width: 0.25
+  parkour_step:                  # 파쿠르 단차 - 최대 단차 높이 탐색용 (Extreme Parkour, ICRA 2024)
+    type: parkour_step
+    proportion: 0.1
+    step_height_range: [0.03, 0.35]
+    step_length: 0.4
+    platform_length: 1.6
+    num_steps: 3
+  parkour_hurdle:                # 파쿠르 허들 - 다리로 넘는 얇은 장애물, 단차와는 다른 극복 방식
+    type: parkour_hurdle
+    proportion: 0.1
+    hurdle_height_range: [0.03, 0.22]
+    hurdle_thickness: 0.08
+    platform_length: 1.6
+    num_hurdles: 3

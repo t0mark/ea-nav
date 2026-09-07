@@ -1,8 +1,9 @@
 # fan-ziqi/robot_lab 공식 리포(config/wheeled/unitree_go2w/rough_env_cfg.py + assets/unitree.py)를
 # 재클론해 재검증 후 반영했다. 다리는 위치제어(HipX만 0.125/나머지 0.25), 바퀴는 속도제어로 분리했다
 # (이전엔 바퀴까지 위치제어라 실제로 구르지 못하는 버그가 있었다). contact_forces·
-# feet_contact_without_cmd·joint_power·upward·joint_pos_penalty는 robot_lab 전용 커스텀 보상
-# 함수라 우리 레지스트리에 없어 뺐다.
+# feet_contact_without_cmd·joint_power·upward는 이후 레지스트리에 구현해 반영함(실측: upward 없이
+# 학습시켰더니 배를 깔고 정지하는 정책으로 수렴 - model_500 비디오로 확인). joint_pos_penalty는
+# 아직 레지스트리에 없어 뺐다.
 usd_path: unitree_go2w.usd
 base_body_name: base
 foot_body_names: FL_foot|FR_foot|RL_foot|RR_foot
@@ -53,6 +54,16 @@ rewards:
     joint_names: ^(?!.*_foot_joint).*$
 - name: undesired_contacts
   weight: -1.0
+- name: contact_forces
+  weight: -1.5e-04
+- name: joint_power
+  weight: -2.0e-05
+  params:
+    joint_names: ^(?!.*_foot_joint).*$
+- name: feet_contact_without_cmd
+  weight: 0.1
+- name: upward
+  weight: 1.0
 - name: joint_mirror
   weight: -0.05
   params:
@@ -60,11 +71,16 @@ rewards:
     - [FR_(hip|thigh|calf).*, RL_(hip|thigh|calf).*]
     - [FL_(hip|thigh|calf).*, RR_(hip|thigh|calf).*]
 default_joint_pos:
-  FL_calf_joint: -101.99966
-  FR_calf_joint: -101.99966
-  RL_calf_joint: -101.99966
-  RR_calf_joint: -101.99966
-termination: []  # 원본이 illegal_contact 종료조건 자체를 꺼둔다
+  FL_calf_joint: -1.78023
+  FR_calf_joint: -1.78023
+  RL_calf_joint: -1.78023
+  RR_calf_joint: -1.78023
+termination:
+- name: orientation
+  limit_angle: 0.7
+# 원본은 illegal_contact 종료조건만 끄고, upward 보상(위에 추가함)만으로 낙상을 억제한다.
+# 우리는 upward 보상을 추가한 뒤에도 orientation 종료조건을 함께 둔다 - 둘 다 같은 방향(뒤집힘 억제)
+# 이라 상충하지 않고, 종료조건이 있으면 나쁜 자세에서 더 빨리 에피소드를 끝내 학습이 더 안정적이다.
 policy_architecture: mlp
 algorithm: ppo
 domain_randomization: basic

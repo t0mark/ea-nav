@@ -4,8 +4,13 @@ foot_body_names: FL_foot|FR_foot|RL_foot|RR_foot
 undesired_contact_body_names: FL_calf|FR_calf|RL_calf|RR_calf
 actuator:
   type: simple
+  model: dc_motor  # Isaac Lab 공식 UNITREE_GO2_CFG(DCMotorCfg) 그대로 - 토크·속도 포화가 있는 실제 모터 모델
   stiffness: 25.0
   damping: 0.5
+  effort_limit: 23.5
+  saturation_effort: 23.5
+  velocity_limit: 30.0
+  friction: 0.0
 action:
   type: position_only
   scale: 0.25
@@ -46,7 +51,24 @@ termination:
 - contact
 policy_architecture: mlp
 algorithm: ppo
-domain_randomization: basic
+# Isaac Lab 공식 config/go2/rough_env_cfg.py가 부모(velocity_env_cfg.py) 기본값 위에 거는
+# go2 전용 오버라이드 4개를 그대로 반영 - push_robot을 끄고, 리셋 시 베이스 속도 랜덤화를 꺼서
+# 위치·yaw만 랜덤화된 채로 스폰하고, 관절 초기 자세 랜덤화도 꺼서(1.0=고정) 정확한 기본 자세로
+# 시작하며, 베이스 질량은 곱연산이 아니라 -1.0~+3.0kg 덧셈으로 흔든다.
+domain_randomization:
+  type: basic
+  reset_joint_position_range: [1.0, 1.0]
+  push_robot: false
+  reset_base_velocity_range:
+    x: [0.0, 0.0]
+    y: [0.0, 0.0]
+    z: [0.0, 0.0]
+    roll: [0.0, 0.0]
+    pitch: [0.0, 0.0]
+    yaw: [0.0, 0.0]
+  add_base_mass:
+    range: [-1.0, 3.0]
+    operation: add
 agent:
   num_envs: 4096
   max_iterations: 1500

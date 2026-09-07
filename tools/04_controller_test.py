@@ -312,16 +312,22 @@ class _WheeledRobotTest:
 class _LeggedRobotTest:
     """legged 로봇 1종을 학습된 정책으로 ㄱ자 경로를 추종시키고 도달 여부를 판정한다."""
 
-    def __init__(self, mode: str) -> None:
+    def __init__(self, mode: str, device: str) -> None:
         """파일럿/본 실행 여부를 저장한다 - legged는 로봇마다 독립된 env를 새로 만들어 재사용할 공유
-        카메라·씬이 없다."""
+        카메라·씬이 없다.
+
+        device를 넘기지 않으면 LocoRunner가 기본값 cuda:0으로 env를 만드는데, GPU 0~3에서 학습이
+        동시에 돌고 있을 때 그 위에 카메라 렌더링까지 겹치면 03_controller_rl.py가 경고하는 것과
+        같은 GPU 전력 스파이크 상황이 재현될 수 있다 - 그래서 항상 호출부가 명시한 device를 그대로 쓴다.
+        """
         self._mode = mode
+        self._device = device
 
     def run(self, sub_category: str, robot_id: str) -> bool:
         """정책을 로드해 경로를 끝까지 쫓아가는지 시뮬레이션한다."""
         from scripts.sim.controller.legged.loco_runner import LocoRunner
 
-        runner = LocoRunner(category=sub_category, robot_id=robot_id, num_envs=1)
+        runner = LocoRunner(category=sub_category, robot_id=robot_id, num_envs=1, device=self._device)
         runner.reset()
         robot = runner.env.scene["robot"]
 
@@ -403,7 +409,7 @@ def main() -> None:
                 clear_prim(_ROBOT_PRIM_PATH)
     else:
         robots = _select_robots(_discover_legged_robots(), args_cli.robot_id, args_cli.mode)
-        test = _LeggedRobotTest(args_cli.mode)
+        test = _LeggedRobotTest(args_cli.mode, device=args_cli.device)
         for sub_category, robot_id in robots:
             try:
                 results[robot_id] = test.run(sub_category, robot_id)

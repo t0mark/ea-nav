@@ -7,12 +7,18 @@ go2w/m20/tron2a_wf처럼 다리-바퀴 혼합 구조인 로봇 전용이다 - �
 position_joints/velocity_joints 각각의 pattern은 문자열(하나의 정규식) 또는 리스트(정확한 관절
 이름들, DeepRobotics M20 공식 rough_env_cfg.py가 실제로 쓰는 방식)를 받고, scale은 스칼라 또는
 관절 패턴별 값이 다른 딕셔너리(M20 공식의 "HipX만 0.125, 나머지 0.25")를 받는다.
+
+clip=(-100.0, 100.0)은 원본이 joint_pos·joint_vel 양쪽에 거는 안전장치를 그대로 반영한 것이다 -
+position_only.py 쪽 docstring 참고(unitree_b2·deeprobotics_lite3에서 이게 빠진 채로 학습시켰다가
+가치함수 loss 폭주로 PPO가 멈추는 것을 실측했다).
 """
 
 from __future__ import annotations
 
 from isaaclab.envs import mdp as core_mdp
 from isaaclab.utils import configclass
+
+_ACTION_CLIP = {".*": (-100.0, 100.0)}
 
 
 @configclass
@@ -35,8 +41,12 @@ def build(action_cfg: dict) -> ActionsCfg:
         joint_names=_as_joint_names(position["pattern"]),
         scale=position["scale"],
         use_default_offset=True,
+        clip=_ACTION_CLIP,
     )
     cfg.joint_vel = core_mdp.JointVelocityActionCfg(
-        asset_name="robot", joint_names=_as_joint_names(velocity["pattern"]), scale=velocity["scale"]
+        asset_name="robot",
+        joint_names=_as_joint_names(velocity["pattern"]),
+        scale=velocity["scale"],
+        clip=_ACTION_CLIP,
     )
     return cfg

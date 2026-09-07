@@ -44,10 +44,10 @@ rewards:
   params:
     threshold: 1.0
 default_joint_pos:
-  fl_kn: -87.08958
-  fr_kn: -87.08958
-  hl_kn: -87.08958
-  hr_kn: -87.08958
+  fl_kn: -1.52
+  fr_kn: -1.52
+  hl_kn: -1.52
+  hr_kn: -1.52
 termination:
 - contact
 policy_architecture: mlp

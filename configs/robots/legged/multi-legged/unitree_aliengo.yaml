@@ -2,9 +2,11 @@
 # 후 반영했다(전용 IsaacLab 포트는 없어 이 legged_gym 리포가 최선의 근거). joint_power·
 # foot_clearance·smoothness는 이 리포 전용 커스텀 보상이라 뺐다. torques/dof_pos_limits/
 # feet_air_time/collision은 원본 자체가 weight 0(비활성)이라 우리도 뺐다.
+# foot_body_names는 CALF다 - 이 USD에는 별도 FOOT 링크가 없고(실측: RigidBody 링크가 hip/thigh/
+# calf에서 끝남) unitree_laikago와 같은 구조다.
 usd_path: unitree_aliengo.usd
 base_body_name: base
-foot_body_names: FL_foot|FR_foot|RL_foot|RR_foot
+foot_body_names: FL_calf|FR_calf|RL_calf|RR_calf
 # undesired_contact_body_names 없음 - 원본의 penalize_contacts_on(thigh/calf/base)은 실제 weight가
 # 0(비활성)이라 undesired_contacts 보상 자체를 안 쓴다.
 actuator:

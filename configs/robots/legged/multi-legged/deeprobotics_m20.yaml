@@ -1,9 +1,10 @@
 # DeepRobotics 공식 리포(DeepRoboticsLab/rl_training) M20 rough_env_cfg.py + assets/deeprobotics.py
 # 세팅을 재클론해 재검증 후 반영했다. 회전 보행 전용 보상(rotation_gait_status/symmetry)·조건부
-# hipy/knee 페널티·bad_orientation_penalty(-1000, reward로 처리)는 이 리포 전용 커스텀 함수라 뺐다
-# (대신 orientation 종료조건으로 급격한 전도는 잡는다 - 정확한 임계각은 원본에 없어 digit과 같은
-# 0.7rad을 그대로 씀). 원본은 illegal_contact 종료조건 자체를 꺼두지만(전도는 보상 페널티로만
-# 처리), 우리는 orientation 종료조건 하나만 켜서 대체한다.
+# hipy/knee 페널티는 이 리포 전용 커스텀 함수라 아직 뺐다. bad_orientation_penalty(-1000)는
+# 이후 레지스트리에 구현해 아래에 추가했다 - 원본은 이 보상 + 부모 클래스의 orientation 종료조건
+# 조합으로 전도를 억제하는데, 우리는 orientation 종료조건(0.7rad, digit과 동일)만으로 이미 학습이
+# 잘 되고 있어(2026-09-06 기준 진행 중) 진행 중인 학습은 재시작하지 않고 설정만 반영해둔다.
+# 원본은 illegal_contact 종료조건 자체를 꺼두지만, 우리는 orientation 종료조건을 켜서 대체한다.
 usd_path: deeprobotics_m20.usd
 base_body_name: base_link
 foot_body_names: fl_wheel|fr_wheel|hl_wheel|hr_wheel
@@ -70,6 +71,8 @@ rewards:
   weight: -0.75
   params:
     joint_names: .*knee.*
+- name: bad_orientation_penalty
+  weight: -1000.0
 termination:
 - name: orientation
   limit_angle: 0.7

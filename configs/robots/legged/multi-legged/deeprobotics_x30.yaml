@@ -37,10 +37,10 @@ rewards:
   params:
     threshold: 1.0
 default_joint_pos:
-  FL_Knee_joint: 82.50592
-  FR_Knee_joint: 82.50592
-  HL_Knee_joint: 82.50592
-  HR_Knee_joint: 82.50592
+  FL_Knee_joint: 1.44
+  FR_Knee_joint: 1.44
+  HL_Knee_joint: 1.44
+  HR_Knee_joint: 1.44
 termination:
 - contact
 policy_architecture: mlp

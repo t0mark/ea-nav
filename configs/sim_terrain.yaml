@@ -44,3 +44,17 @@ sub_terrains:
     slope_range: [0.0, 0.7]
     platform_width: 2.0
     border_width: 0.25
+  parkour_step:                # 파쿠르 단차 (평지 회복 구간을 둔 단일 단차 반복)
+    type: parkour_step
+    proportion: 0.25
+    step_height_range: [0.05, 0.35]
+    step_length: 0.4
+    platform_length: 1.6
+    num_steps: 3
+  parkour_hurdle:              # 파쿠르 허들 (얇은 벽을 다리로 넘는 단일 장애물 반복)
+    type: parkour_hurdle
+    proportion: 0.25
+    hurdle_height_range: [0.05, 0.2]
+    hurdle_thickness: 0.1
+    platform_length: 1.6
+    num_hurdles: 3
