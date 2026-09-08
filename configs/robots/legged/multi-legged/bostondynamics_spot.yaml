@@ -1,61 +1,59 @@
-# Spot 공식(IsaacLab SpotFlatEnvCfg)은 height_scan 없는 커스텀 flat 지형 + 지연·비선형 액추에이터
-# (DelayedPD/RemotizedPD) + spot_mdp.py 전용 보상 13종을 쓴다 - 전부 우리 골격(rough 커리큘럼 +
-# height_scan 필수 + 단순 PD 액추에이터)과 구조 자체가 달라 "근사"가 아니라 재현이 안 된다.
-# 그래서 질량·크기가 가장 비슷한 4족보행인 ANYmal의 레시피로 대체했다 - ANYmal 공식도 우리가 재현
-# 못하는 것(학습된 LSTM 액추에이터망)을 갖고 있어서, 우리 파이프라인에서는 이미 simple PD + Isaac Lab
-# 기본 보상 세트(오버라이드 없음) 그대로 쓰고 있다. 그 레시피를 그대로 가져오되, 액추에이터
-# stiffness/damping과 action_scale만 Spot 공식 파일에서 실측 확인한 값(60.0/1.5, 0.2)으로 바꿨다.
+# Isaac Lab 공식 SPOT_CFG를 이 프로젝트 골격으로 옮긴 것 - 물리적 사실만 여기 담는다.
+# 공식은 지연·비선형 액추에이터(DelayedPDActuatorCfg / RemotizedPDActuatorCfg)를 쓰는데, 이 프로젝트
+# 골격(implicit PD / DC-motor)으로는 구동 지연(0~4 physics step)과 무릎의 관절각별 토크 lookup을
+# 재현할 수 없다. 재현 가능한 부분(게인 60.0/1.5, 힙 토크 한계 45.0 N·m, action_scale 0.2)은 공식
+# 값을 그대로 쓰고, 무릎은 lookup 대신 힙과 같은 45.0 N·m로 근사한다.
+# 학습 설계는 rl_preset이 가리키는 configs/rl/legged/presets/baseline.yaml 이 정한다.
+rl_preset: baseline
 usd_path: bostondynamics_spot.usd
 base_body_name: body
 foot_body_names: fl_foot|fr_foot|hl_foot|hr_foot
 undesired_contact_body_names: fl_lleg|fr_lleg|hl_lleg|hr_lleg
+hip_joint_names: .*_hx
+# effort_limit이 없으면 PD 출력 토크가 무제한이 되어 다른 로봇(go2 23.5 / a1 33.5 / ANYmal 80 N·m)만
+# 토크 한계를 지는 불공정한 비교가 된다 - 공식 DelayedPDActuatorCfg의 45.0 N·m를 그대로 건다.
 actuator:
-  type: simple
+  model: implicit  # 공식 DelayedPD/RemotizedPD와 같은 "게인 + 토크 클램프" 조합 (구동 지연은 재현 불가)
   stiffness: 60.0
   damping: 1.5
-action:
-  type: position_only
-  scale: 0.2
-rewards:
-- name: track_lin_vel_xy_exp
-  weight: 1.0
-- name: track_ang_vel_z_exp
-  weight: 0.5
-- name: lin_vel_z_l2
-  weight: -2.0
-- name: ang_vel_xy_l2
-  weight: -0.05
-- name: dof_torques_l2
-  weight: -1.0e-05
-- name: dof_acc_l2
-  weight: -2.5e-07
-- name: action_rate_l2
-  weight: -0.01
-- name: flat_orientation_l2
-  weight: -1.0
-- name: dof_pos_limits
-  weight: -1.0
-- name: feet_air_time_multi
-  weight: 0.125
-  params:
-    threshold: 0.5
-- name: undesired_contacts
-  weight: -1.0
-  params:
-    threshold: 1.0
+  effort_limit: 45.0
+# 스폰 시 베이스 높이(m) - Isaac Lab 공식 SPOT_CFG.init_state.pos 값 그대로.
+# 비워두면 usd의 authored 자세 bbox로 추정하는데, 이 로봇의 기본 자세는 웅크린 자세라
+# 추정값이 몇 cm 높게 잡혀 리셋마다 낙하한다.
+spawn_height: 0.50
+action_scale: 0.2
+# Isaac Lab 공식 SPOT_CFG.init_state.joint_pos 패턴 그대로 - 이 USD의 실제 관절 이름은 공식과 동일한
+# 축약형이다(env 생성 에러의 "Available strings"로 실측 확인).
+default_joint_pos_complete: true
 default_joint_pos:
-  fl_kn: -1.52
-  fr_kn: -1.52
-  hl_kn: -1.52
-  hr_kn: -1.52
-termination:
-- contact
-policy_architecture: mlp
-algorithm: ppo
-domain_randomization: basic
+  "[fh]l_hx": 0.1
+  "[fh]r_hx": -0.1
+  "f[rl]_hy": 0.9
+  "h[rl]_hy": 1.1
+  ".*_kn": -1.5
+# 공식 Spot 태스크(config/spot/)는 이벤트 구성 자체가 다른 별도 모듈이라 대조할 "부모 기본값
+# 오버라이드"가 없다 - ANYmal 계열과 같은 공식 velocity_env_cfg.py 기본값(덧셈 -5~+5kg)을 쓴다.
+domain_randomization:
+  add_base_mass:
+    range: [-5.0, 5.0]
+    operation: add
+# standard_quadruped: 공식 Spot 태스크는 완전히 별도 보상 모듈(config/spot/mdp/rewards.py)이라
+# 대조할 수 있는 부모 기본값 오버라이드가 없다 - 이 프로젝트에서 실측 검증된 값(ANYmal-D와 동일한
+# standard_quadruped 타입)을 그대로 쓴다. 몸집이 무거워(31.6kg) undesired_contacts를 켜도 지장 없다는
+# 것도 실측 확인.
+reward_type: standard_quadruped
+reward_weights:
+  track_lin_vel_xy_exp: 1.0
+  track_ang_vel_z_exp: 0.5
+  lin_vel_z_l2: -2.0
+  ang_vel_xy_l2: -0.05
+  dof_torques_l2: -1.0e-5
+  dof_acc_l2: -2.5e-7
+  action_rate_l2: -0.01
+  feet_air_time: 0.125
+  undesired_contacts: -1.0
+  feet_stumble: -1.0
+  hip_pos: -0.5
+# preset.algorithm 기본값 위에 Spot만 다른 키를 덮어쓴다(공식 spot/agents/rsl_rl_ppo_cfg.py의 낮은 entropy).
 agent:
-  num_envs: 4096
-  max_iterations: 1500
-  learning_rate: 0.001
-  entropy_coef: 0.005
-  hidden_dims: [512, 256, 128]
+  entropy_coef: 0.0025

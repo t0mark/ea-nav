@@ -28,14 +28,14 @@ legged의 몸통·발은 물리 시뮬레이션이 전혀 필요 없다 - 둘 �
       multi-legged(팔이 없음)는 이 후보 전부가 발이고, humanoid(팔도 같은 조건을 만족)는 usd에
       저장된 기본 자세에서 가장 낮은 2개만 발로 뽑는다(발이 손보다 낮은 건 로봇 설계상 항상 참).
     이 판단은 usd 파일을 스폰하지 않고 그대로 열어서(Usd.Stage.Open) 구조와 authored 자세만 읽으면
-    끝나므로, 관절 기본 자세가 안정적으로 서 있는 자세인지 여부와 무관하게 항상 같은 결과가 나온다 -
-    이전에 로봇을 실제로 스폰해 중력으로 정지시킨 뒤 접지를 실측하던 방식은, 기본 자세가 서 있는
-    자세라는 보장이 없어 로봇마다 다른 이유로 실패해서 폐기했다.
+    끝나므로, 관절 기본 자세가 안정적으로 서 있는 자세인지 여부와 무관하게 항상 같은 결과가 나온다
+    (로봇을 실제로 스폰해 중력으로 정지시킨 뒤 접지를 재는 방식은 기본 자세가 서 있는 자세라는
+    보장이 없어 로봇마다 다른 이유로 실패한다).
 
     관절 PD 게인(actuator_stiffness/damping)도 같은 이유로 USD authored 값을 그대로 안 믿는다 -
-    URDF->USD 변환기가 정지 자세를 딱딱하게 붙잡아두려고 넣은 값(관측됨: unitree_go2 stiffness 1e7,
-    damping 1e5 - Isaac Lab 공식 값 25/0.5의 40만 배)이라 RL 학습에 못 쓴다. 대신 authored 관절
-    effort 한계(최대 토크)에서 Isaac Lab 공식 로봇들의 비율을 참고해 역산한다(_compute_actuator_gains).
+    URDF->USD 변환기가 정지 자세를 딱딱하게 붙잡아두려고 Isaac Lab 공식 값(25/0.5)의 수십만 배에
+    달하는 stiffness/damping을 넣는 경우가 많아 RL 학습에 못 쓴다. 대신 authored 관절 effort
+    한계(최대 토크)에서 Isaac Lab 공식 로봇들의 비율을 참고해 역산한다(_compute_actuator_gains).
 
 pxr는 Kit 프로세스가 뜬 뒤에만 임포트할 수 있으므로, 이 모듈의 함수는 AppLauncher 부팅이 끝난
 tools/ 진입점에서만 호출해야 한다(capture.py와 동일한 전제) - legged 쪽은 스폰은 안 하지만 pxr
@@ -471,9 +471,8 @@ def _leg_chain_joint_names(
     """각 발 링크에서 루트까지 거슬러 올라가며 지나는 관절 이름을 모은다 (다리 체인 전용).
 
     로봇 전체 관절이 아니라 다리 체인 관절만 걸러야 하는 이유: humanoid는 손가락처럼 다리와 무관한
-    관절이 많아서(관측됨: fourier_gr1 - 다리 관절 12개 vs 손가락 등 나머지 44개, 손가락 토크가 훨씬
-    작아 관절 전체 중앙값을 쓰면 다리에 필요한 토크보다 훨씬 작은 값이 나옴), actuator 게인은 실제로
-    체중을 지탱·보행하는 다리 관절 기준으로만 잡아야 한다.
+    관절이 많고 그 토크가 훨씬 작아, 관절 전체 중앙값을 쓰면 다리에 필요한 값보다 훨씬 작게 나온다.
+    actuator 게인은 실제로 체중을 지탱·보행하는 다리 관절 기준으로만 잡아야 한다.
     """
     names: set[str] = set()
     for foot_path in foot_leaves:
@@ -537,14 +536,14 @@ def _compute_default_joint_overrides(stage, root_prim_path: str) -> dict[str, fl
     """0.0이 가동범위를 벗어나는 관절만 골라, 범위 중앙값을 기본 자세로 제안한다.
 
     ArticulationCfg는 관절 기본 자세가 리밋 안에 있어야만 스폰을 허용하는데, 무릎처럼 애초에 0도를
-    포함하지 않게 설계된 관절이 있다(관측됨: unitree_go2의 calf_joint 리밋이 [-2.723, -0.838]로 전부
-    음수). 중앙값은 "물리적으로 유효하다"만 보장하는 값이고, 실제로 자연스럽게 서는 자세는 학습
-    (reset_robot_joints 이벤트의 랜덤 스케일 + PPO)이 그 위에서 찾아가므로 이걸로 충분하다.
+    포함하지 않게 설계된 관절이 있다(예: 사족보행 calf_joint 리밋이 전부 음수). 중앙값은 "물리적으로
+    유효하다"만 보장하는 값이고, 실제로 자연스럽게 서는 자세는 학습(reset_robot_joints 이벤트의
+    랜덤 스케일 + PPO)이 그 위에서 찾아가므로 이걸로 충분하다.
 
     UsdPhysics.RevoluteJoint의 lower/upper limit은 USD Physics 스키마 규약상 도(degree) 단위로
     authored되어 있는데, ArticulationCfg.init_state.joint_pos(및 이 값을 검증하는 PhysX 쪽 리밋)는
-    라디안을 기대한다 - 변환 없이 그대로 쓰면 값이 57배(180/pi)가량 부풀려져 리밋을 한참 벗어난다
-    (관측됨: unitree_b2/go2w calf_joint, deeprobotics_lite3 knee_joint).
+    라디안을 기대한다 - 변환 없이 그대로 쓰면 값이 57배(180/pi)가량 부풀려져 리밋을 한참 벗어나므로
+    math.radians()로 변환해서 쓴다.
     """
     from pxr import Usd, UsdPhysics
 
@@ -567,18 +566,15 @@ def _compute_default_joint_overrides(stage, root_prim_path: str) -> dict[str, fl
 def _compute_actuator_gains(stage, root_prim_path: str, leg_joint_names: set[str]) -> tuple[float, float]:
     """다리 체인 관절의 authored 최대 토크(effort limit) 중앙값으로 PD 게인을 추정한다.
 
-    USD에 authored된 stiffness/damping 값 자체는 신뢰하지 않는다 - URDF->USD 변환기가 "정지 자세를
-    딱딱하게 붙잡아두기 위한" 임의의 큰 값(관측됨: unitree_go2 stiffness 1e7, damping 1e5)을 넣는
-    경우가 흔해서, RL 학습에 그대로 쓰면 관절이 사실상 위치 고정에 가깝게 거동해 정책이 자연스러운
-    토크를 못 낸다. 대신 Isaac Lab 공식 로봇 설정(A1, Go2 등: effort_limit 23.5~45 -> stiffness=25,
-    damping=0.5 / H1: effort_limit 100~300 -> stiffness 20~200, damping 4~10)을 대조해보면, 로봇
-    스케일이 달라도 stiffness가 대략 그 로봇 관절의 최대 토크(effort limit)와 같은 자릿수이고
-    damping은 stiffness의 약 2%인 경향이 있다 - 이 비율을 일반 공식으로 채택한다.
+    USD에 authored된 stiffness/damping 값 자체는 신뢰하지 않는다 - URDF->USD 변환기가 정지 자세를
+    딱딱하게 붙잡아두려고 임의의 큰 값을 넣는 경우가 흔해, RL 학습에 그대로 쓰면 관절이 사실상 위치
+    고정에 가깝게 거동해 정책이 자연스러운 토크를 못 낸다. 대신 Isaac Lab 공식 로봇 설정(A1, Go2 등:
+    effort_limit 23.5~45 -> stiffness=25, damping=0.5 / H1: effort_limit 100~300 -> stiffness
+    20~200, damping 4~10)을 보면, 로봇 스케일이 달라도 stiffness가 대략 그 로봇 관절의 최대 토크
+    (effort limit)와 같은 자릿수이고 damping은 stiffness의 약 2%다 - 이 비율을 일반 공식으로 쓴다.
 
     leg_joint_names로 다리 체인 관절만 걸러서 본다 - 로봇 전체 관절로 중앙값을 내면 humanoid의 손가락
-    관절(수가 많고 토크가 훨씬 작음)에 밀려 다리에 필요한 값보다 훨씬 작게 나온다(관측됨: fourier_gr1
-    - 다리 관절 12개는 최대 133인데 손가락 등 나머지 44개가 대부분 1~10이라, 전체로 계산하면
-    stiffness가 4 근처까지 떨어짐 - 다리 12개만 걸러야 133 근처의 제대로 된 값이 나온다).
+    관절(수가 많고 토크가 훨씬 작음)에 밀려 다리에 필요한 값보다 훨씬 작게 나온다.
     """
     from pxr import Usd, UsdPhysics
 

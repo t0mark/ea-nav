@@ -3,7 +3,7 @@
 Extreme Parkour(ICRA 2024, chengxuxin/extreme-parkour)의 parkour_step_terrain을 참고해,
 연속 계단이 아니라 단차 하나마다 평지 회복 구간을 두고 반복 배치한다. 시각 정보 없이
 고유수용감각·접촉 피드백만으로도 넘을 수 있는 "단일 최대 단차 높이"를 로봇별로 커리큘럼
-난이도(row)에 따라 탐색하기 위한 지형이다.
+난이도(단계)에 따라 탐색하기 위한 지형이다.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ class ParkourStepTerrainCfg(SubTerrainBaseCfg):
     function = parkour_step_terrain
 
     step_height_range: tuple[float, float] = MISSING
-    """단차 높이의 최소·최대값 (m). difficulty(row)에 따라 선형 보간된다."""
+    """단차 높이의 최소·최대값 (m). difficulty(단계)에 따라 선형 보간된다."""
 
     step_length: float = 0.4
     """단차 하나의 진행 방향(x) 두께 (m)."""

@@ -1,105 +1,74 @@
-# DeepRobotics 공식 리포(DeepRoboticsLab/rl_training) rough_env_cfg.py + assets/deeprobotics.py
-# 세팅을 재클론해 재검증 후 반영했다(actuator 24.0/0.48 -> 30.0/1.0로 수정, termination에서
-# illegal_contact 종료조건 제거 - 원본이 꺼둠). feet_air_time_lin_xy·feet_air_time_ang_z_lite3·
-# joint_power·contact_forces·feet_contact_without_cmd는 이후 레지스트리에 구현해 반영했다
-# (지형 난이도 커리큘럼에 따른 가중치 스케일링은 우리 쪽에 그 서브시스템이 없어 제외 - 원본은 이
-# 배율 때문에 학습 초반엔 이 항목들 영향이 작다가 점점 커지는데, 우리는 처음부터 전체 weight로
-# 적용된다). phase_foot_trajectory_exp(베지어 곡선 기반 발 궤적 추종)는 구현 규모가 커서 아직
-# 뺐다 - 나머지(속도추종·자세·발 접촉·게이트·좌우대칭)는 전부 실제 weight 그대로 반영했다.
-# (실측: 위 보상들이 빠진 채로 학습시켰다가 주저앉는 정책(model_400) -> orientation 종료조건만
-# 추가해 재시작했다가 이번엔 학습 발산(PPO std NaN, iter ~200)으로 두 번 실패했다.)
+# DeepRobotics Lite3 - 물리적 사실만 여기 담는다.
+# 이 로봇은 Isaac Lab 공식 자산에 없고 제조사 리포(DeepRoboticsLab/rl_training)가 공식 참조인데,
+# 그쪽은 보상 설계 자체가 다르다(feet_air_time_lin_xy/joint_power/feet_gait/joint_mirror/
+# phase_foot_trajectory_exp 등). 이 프로젝트는 4족 전체가 같은 preset(rudin_parkour)을 공유해야
+# embodiment 비교가 성립하므로, 보상은 같은 경량 4족인 go2/a1과 동일한 세트를 쓰고 제조사 고유
+# 보상 설계는 재현하지 않는다. 액추에이터·관절 리밋 같은 물리적 사실만 URDF 실측값으로 반영한다.
+rl_preset: baseline
 usd_path: deeprobotics_lite3.usd
 base_body_name: TORSO
 foot_body_names: FL_FOOT|FR_FOOT|HL_FOOT|HR_FOOT
 undesired_contact_body_names: FL_SHANK|FR_SHANK|HL_SHANK|HR_SHANK
+hip_joint_names: .*_HipX_joint
+# 토크·속도 한계가 관절군마다 다르다(URDF 실측: HipX/HipY 24N·m·26.2rad/s, Knee 36N·m·17.3rad/s).
+# Isaac Lab 액추에이터 cfg는 이 값들을 관절 정규식 dict로 받으므로 그대로 나눠 준다.
+# stiffness/damping은 제조사 리포 rl_training의 실측값(30.0/1.0)을 쓴다.
 actuator:
-  type: simple
+  model: implicit
   stiffness: 30.0
   damping: 1.0
-action:
-  type: position_only
-  scale: {".*_HipX_joint": 0.125, "^(?!.*_HipX_joint).*$": 0.25}
-rewards:
-- name: track_lin_vel_xy_exp
-  weight: 4.0
-- name: track_ang_vel_z_exp
-  weight: 1.5
-- name: lin_vel_z_l2
-  weight: -20.0
-- name: ang_vel_xy_l2
-  weight: -0.25
-- name: dof_torques_l2
-  weight: -2.5e-04
-- name: dof_acc_l2
-  weight: -1.0e-08
-- name: action_rate_l2
-  weight: -0.1
-- name: flat_orientation_l2
-  weight: -20.0
-- name: dof_pos_limits
-  weight: -5.0
-- name: base_height_l2
-  weight: -50.0
-  params:
-    target_height: 0.55
-- name: undesired_contacts
-  weight: -0.5
-- name: contact_forces
-  weight: -0.1
-- name: joint_power
-  weight: -8.0e-04
-- name: feet_contact_without_cmd
-  weight: 0.1
-- name: feet_air_time_lin_xy
-  weight: 5.0
-- name: feet_air_time_ang_z_lite3
-  weight: 5.0
-- name: feet_slide
-  weight: -0.05
-- name: stand_still
-  weight: -0.5
-  params:
-    joint_names: .*_HipX_joint|.*_HipY_joint|.*_Knee_joint
-- name: feet_gait
-  weight: 0.5
-  params:
-    synced_feet_pair_names:
-    - [FL_FOOT, HR_FOOT]
-    - [FR_FOOT, HL_FOOT]
-- name: joint_mirror
-  weight: -0.05
-  params:
-    mirror_joints:
-    - [FL_(HipX|HipY|Knee).*, HR_(HipX|HipY|Knee).*]
-    - [FR_(HipX|HipY|Knee).*, HL_(HipX|HipY|Knee).*]
-- name: joint_deviation_l1
-  weight: -0.4
-  params:
-    joint_names: .*_HipX_joint
-- name: joint_deviation_l1
-  weight: -2.0
-  params:
-    joint_names: .*_Knee_joint
+  effort_limit:
+    .*_HipX_joint: 24.0
+    .*_HipY_joint: 24.0
+    .*_Knee_joint: 36.0
+  velocity_limit:
+    .*_HipX_joint: 26.2
+    .*_HipY_joint: 26.2
+    .*_Knee_joint: 17.3
+# 스폰 시 베이스 높이(m) - 이 로봇은 Isaac Lab 공식 자산이 없어 참조할 init pos가 없다. 제조사
+# 사양의 기립 높이 406mm를 쓰되, Isaac Lab이 go2(사양 ~400mm -> 0.40)·a1(-> 0.42)에 적용하는 규약과
+# 맞춘 값이다. 비워두면 usd bbox 추정값(0.453)이 잡혀 리셋마다 그만큼 더 낙하한다.
+spawn_height: 0.40
+# 제조사 리포가 HipX만 작은 액션 스케일을 쓴다 - 좌우 벌림 관절이 과하게 움직이면 자세가 무너진다.
+action_scale:
+  .*_HipX_joint: 0.125
+  ^(?!.*_HipX_joint).*$: 0.25
+# Knee 가동범위가 [0.52, 2.79]로 0을 포함하지 않아 반드시 값을 줘야 한다(0이면 스폰 시 리밋 이탈).
+# HipX·HipY는 0이 가동범위 안이라 나머지 관절 와일드카드가 0.0으로 채운다.
+default_joint_pos_complete: false
 default_joint_pos:
   FL_Knee_joint: 1.658
   FR_Knee_joint: 1.658
   HL_Knee_joint: 1.658
   HR_Knee_joint: 1.658
-termination:
-- name: orientation
-  limit_angle: 0.7
-# 원본은 illegal_contact 종료조건을 꺼두고 전도를 보상 페널티(우리 레지스트리에 없는
-# phase_foot_trajectory_exp 등 게이트 형성 보상과 함께)로만 다루는데, 그 보상들이 빠진 채
-# termination까지 꺼두면 정책이 넘어진 자세에서 벗어날 압력이 전혀 없어 주저앉는 채로 수렴한다
-# (실측: model_400에서 다리를 벌린 채 주저앉아 정지) - deeprobotics_m20과 같은 orientation
-# 종료조건으로 대체한다.
-policy_architecture: mlp
-algorithm: ppo
+# 제조사 리포는 이벤트 구성이 달라 대조할 "부모 기본값 오버라이드"가 없다 - 경량 4족인 go2/a1과
+# 같은 Isaac Lab 공식 오버라이드(push 끄기, 관절 초기자세 고정, 리셋 속도 0, 질량 -1~+3kg)를 쓴다.
 domain_randomization:
-  type: extended
-agent:
-  num_envs: 4096
-  max_iterations: 10000
-  learning_rate: 0.001
-  entropy_coef: 0.01
-  hidden_dims: [512, 256, 128]
+  reset_joint_position_range: [1.0, 1.0]
+  push_robot: false
+  reset_base_velocity_range:
+    x: [0.0, 0.0]
+    y: [0.0, 0.0]
+    z: [0.0, 0.0]
+    roll: [0.0, 0.0]
+    pitch: [0.0, 0.0]
+    yaw: [0.0, 0.0]
+  add_base_mass:
+    range: [-1.0, 3.0]
+    operation: add
+# light_quadruped: 11.94kg으로 이 워크스페이스에서 가장 가벼운 4족이다 - go2(16.1kg)·a1보다도
+# 가벼워 undesired_contacts를 켜면 정상 보행 중 스침까지 벌점을 먹는다(scripts/.../rl/rewards.py의
+# LightQuadrupedRewards). 가중치는 같은 경량 4족인 go2/a1과 동일한 값을 쓴다 - 토크 스케일도
+# 비슷하다(lite3 24~36N·m, go2 23.5N·m, a1 33.5N·m).
+reward_type: light_quadruped
+reward_weights:
+  track_lin_vel_xy_exp: 1.5
+  track_ang_vel_z_exp: 0.75
+  lin_vel_z_l2: -2.0
+  ang_vel_xy_l2: -0.05
+  dof_torques_l2: -0.0002
+  dof_acc_l2: -2.5e-7
+  action_rate_l2: -0.01
+  feet_air_time: 0.01
+  feet_stumble: -1.0
+  hip_pos: -0.5

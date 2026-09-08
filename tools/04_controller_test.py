@@ -29,6 +29,10 @@ from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
+# 렌더링 후 simulation_app.close(skip_cleanup=True)로 곧장 종료하면 버퍼링된 stdout이 플러시되지
+# 않고 유실될 수 있다 - 실행 중 print()가 즉시 보이도록 줄 단위 버퍼링으로 바꾼다
+sys.stdout.reconfigure(line_buffering=True)
+
 # 워크스페이스 루트를 sys.path에 추가해 scripts/, configs/ 를 패키지로 임포트할 수 있게 한다
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
@@ -54,6 +58,7 @@ import yaml  # noqa: E402
 import isaaclab.sim as sim_utils  # noqa: E402
 from isaaclab.utils.math import euler_xyz_from_quat  # noqa: E402
 
+from scripts.sim.controller.legged.rl.loco_rl_env import MAX_TRAINED_ANG_VEL_Z  # noqa: E402
 from scripts.sim.env.robot_spawn import clear_prim, spawn_robot_safely  # noqa: E402
 from scripts.sim.nav.path import Path2D, generate_l_shaped_path  # noqa: E402
 from scripts.sim.nav.pure_pursuit import PurePursuitTracker  # noqa: E402
@@ -290,7 +295,7 @@ class _WheeledRobotTest:
         else:
             raise ValueError(f"알 수 없는 wheeled 카테고리: {sub_category}")
 
-        # ackermann처럼 아직 실측 보정을 안 하는 카테고리는 기존에 쓰던 고정값으로 대체한다
+        # ackermann처럼 아직 실측 보정을 안 하는 카테고리는 고정값을 기본값으로 쓴다
         tracker = PurePursuitTracker(
             linear_velocity=raw.get("nav_linear_velocity", 0.2),
             max_angular_velocity=raw.get("nav_max_angular_velocity", 4.5),
@@ -335,10 +340,9 @@ class _LeggedRobotTest:
         goal_marker = spawn_goal_marker() if self._mode == "pilot" else None
         if camera is not None:
             # 센서는 "다음 play 이벤트"에서 초기화되는데, LocoRunner 생성 시점(ManagerBasedRLEnv
-            # 생성자 안의 sim.reset())에 그 이벤트를 이미 다 써버린 뒤라, 여기서 만든 카메라는
-            # 그대로 두면 초기화가 안 된다(_ALL_INDICES 같은 내부 속성이 없다는 에러로 나타남) -
-            # reset()을 한 번 더 호출해 새 play 이벤트를 만들어야 한다(usd_export_config.py의
-            # ContactSensor에서 이미 겪은 것과 같은 문제).
+            # 생성자 안의 sim.reset())에 그 이벤트를 이미 다 써버린 뒤라, 여기서 만든 카메라를 그대로
+            # 두면 초기화가 안 된다(_ALL_INDICES 같은 내부 속성이 없다는 에러로 나타난다) - reset()을
+            # 한 번 더 호출해 새 play 이벤트를 만들어야 초기화된다.
             runner.env.sim.reset()
         # legged 로봇은 학습 안전을 위해 지면 위로 살짝 띄워 스폰된다(scripts/sim/env/robot_spawn.py의
         # ground_clearance) - 그 상태 그대로 카메라를 맞추면, 이후 중력으로 가라앉아 정착한 실제
@@ -353,7 +357,9 @@ class _LeggedRobotTest:
         chase_camera = _ChaseCamera(robot_prim_path) if camera is not None else None
 
         path: Path2D = generate_l_shaped_path(start, _LEG_LENGTH_M)
-        tracker = PurePursuitTracker()
+        # 기본 max_angular_velocity(4.5rad/s)는 바퀴 로봇 접지 마찰용 값이라, RL 정책이 실제로 학습한
+        # 각속도 범위(MAX_TRAINED_ANG_VEL_Z)를 넘는 분포 밖 명령이 된다 - 학습 범위 안으로 제한한다
+        tracker = PurePursuitTracker(max_angular_velocity=MAX_TRAINED_ANG_VEL_Z)
 
         position_history: list[tuple[float, float]] = []
         frames = []

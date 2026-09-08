@@ -1,4 +1,4 @@
-"""파쿠르 지형(단차·허들)이 공유하는 trimesh 생성 헬퍼."""
+"""파쿠르 지형(단차)이 쓰는 trimesh 생성 헬퍼."""
 
 from __future__ import annotations
 
@@ -23,8 +23,7 @@ def make_full_width_obstacles(
 
     장애물 사이를 gap_length만큼 평지로 비워 두어 "장애물 하나 - 평지 회복 - 장애물 하나"
     구조를 만든다. 연속 계단과 달리 매 장애물마다 로봇이 자세를 회복할 여지를 주는 구성으로,
-    Extreme Parkour(ICRA 2024, chengxuxin/extreme-parkour)의 parkour_step/parkour_hurdle
-    지형 생성 방식을 참고했다.
+    Extreme Parkour(ICRA 2024, chengxuxin/extreme-parkour)의 parkour_step 지형 생성 방식을 참고했다.
     """
     meshes: list[trimesh.Trimesh] = []
     span = obstacle_length + gap_length

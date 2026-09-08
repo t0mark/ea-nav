@@ -1,175 +1,155 @@
-"""legged 로봇의 RL 보행 정책을 학습하는 진입점 - 로봇 하나를 지정하면 그대로 본 학습을 돌린다.
+"""legged 로봇의 RL 보행 정책을 학습하는 진입점 - 로봇 하나를 커리큘럼으로 끝까지 학습한다.
 
-robot_id가 multi-legged/humanoid 어느 쪽인지는 usd 파일이 실제로 있는 폴더를 뒤져 자동으로 정한다 -
-robot_id 하나로 이미 어떤 usd를 볼지 정해지는데 카테고리까지 따로 입력받으면 같은 정보를 두 번
-받는 셈이라 굳이 인자로 두지 않는다.
+configs/robots/legged/multi-legged/{robot_id}.yaml 한 장이 로봇의 물리적 사실(usd 경로·바디/관절
+이름·액추에이터 수치·reward_weights·reward_type·도메인 랜덤화)을 담고, `rl_preset:`으로
+configs/rl/legged/presets/{preset}.yaml을 가리킨다. preset이 학습 설계(관측/보상/종료/이벤트/액션
+로직 선택 + PPO 하이퍼파라미터 + 커리큘럼 파라미터)를 정한다 - 4개 로봇이 같은 preset을 가리키면
+embodiment 비교가 성립한다.
 
-configs/robots/legged/{robot_type}/{robot_id}.yaml이 없으면 scripts/sim/utils/usd_export_config.py로
-자동 생성한 뒤 바로 학습을 이어간다. 이 yaml 한 장이 로봇의 물리적 사실(usd 경로·base/foot 링크 이름)뿐
-아니라 학습 방식 축(actuator/action/rewards/termination/policy_architecture/algorithm/
-domain_randomization) 선택과 agent 하이퍼파라미터까지 전부 담고 있어, 로봇 종류에 따른 기본값 분기가
-이 진입점 코드 안에는 전혀 없다 - scripts/sim/controller/legged/rl/robot_profile.py가 그 yaml을 파싱하고,
-loco_rl_env.py/agent_cfg.py가 각 축 레지스트리를 조회해 조립한다.
+이 파일은 두 가지 모드로 동작하고, 자기 자신을 단계마다 다시 실행한다:
+  --stage 없음 = 지휘 모드. 시뮬레이터를 띄우지 않고, 커리큘럼 단계마다 이 파일을 --stage N으로
+    자식 프로세스에 다시 띄운다(scripts/.../rl/curriculum_driver.py).
+  --stage N 있음 = 단계 모드. AppLauncher로 Isaac Sim을 띄우고 그 단계 하나만 학습한 뒤 결과를
+    stage_outcome.yaml에 남기고 프로세스를 끝낸다(scripts/.../rl/rl_trainer.py).
+단계를 프로세스로 자르는 이유는 Isaac Lab이 한 프로세스에서 ManagerBasedRLEnv를 두 번 만들지
+못하기 때문이다 - env.close()가 USD stage의 prim을 지우지 않아 두 번째 env 생성이 "A prim already
+exists at path"로 실패한다(자세한 근거는 curriculum_driver.py 모듈 docstring).
+
+커리큘럼은 자동이다(scripts/sim/env/curriculum/stage_env.py + CurriculumDriver):
+  stage 0(평지)부터 학습 -> 정규화 추종 정확도(track_lin_vel_xy_exp / track_ang_vel_z_exp)가
+  preset의 convergence.threshold 이상인 상태가 patience_evals회 연속 -> 그 단계 "수렴" 판정 ->
+  stage += 1 로 지형 난이도를 올려 다시 학습 -> 반복.
+  한 단계가 수렴하지 못하면(정규화 점수 best가 plateau.window_evals 동안 min_delta 미만 개선 =
+  "정체", 또는 per_stage.max_iterations 도달, 또는 PPO 발산) 커리큘럼을 종료한다. 자식 프로세스가
+  비정상 종료하면 부모가 종료 코드로 알아채고 이력을 남긴 뒤 끝낸다.
+전역 이터레이션 종료 로직은 없다 - 학습이 어디까지 가는지는 로봇이 지형을 못 깰 때 결정된다.
+
+학습이 끝나면:
+- data/sim/policies/legged/multi-legged/{robot_id}/policy.pt = 마지막으로 "수렴한" 단계의 정책(jit)
+- .../curriculum_result.yaml = 단계별 이력 + 최종 클리어 단차/경사 등 메타데이터
+- _train_logs/multi-legged_{robot_id}/stage{N}/ = 단계별 tensorboard 로그 + stage_outcome.yaml
 
 학습 중에는 렌더링을 절대 켜지 않는다 - 병렬 env가 수천 개(PhysX)인 상태에서 카메라 렌더링까지
-동시에 돌리면 GPU 순간 전력이 튀어 PSU 보호회로가 시스템 전체를 강제 종료시키는 것을 실제로
-확인했다(관측됨: enable_cameras=True + 학습 내내 도는 RecordVideo 조합에서 재현, VRAM/RAM 부족이
-아니라 전력 스파이크 문제). 그래서 학습은 완전히 헤드리스로만 돌리고, 진행 상황은 rsl_rl이 남기는
-tensorboard 로그(숫자 지표라 렌더링이 전혀 필요 없다)로 확인한다 - `tensorboard --logdir
-data/sim/policies/legged/_train_logs/{experiment_name}`. 영상으로 실제 걷는 모습을 보고 싶으면
-학습이 끝난 뒤 tools/04_controller_test.py를 별도 프로세스로 실행해 확인한다 - 그때는 로봇 1대
-(num_envs=1)만 돌아가서 학습 때와 같은 동시 부하가 생기지 않는다.
+동시에 돌리면 GPU 순간 전력이 튀어 PSU 보호회로가 시스템 전체를 강제 종료시킬 수 있다(VRAM/RAM
+부족이 아니라 순간 전력 스파이크 문제). 영상으로 실제 걷는 모습을 보고 싶으면 학습이 끝난 뒤
+tools/04_controller_test.py를 별도 프로세스로 실행한다.
 
-학습 종료는 max_iterations에 도달하면 끝나는 고정 스텝 방식이다 - rsl_rl의 OnPolicyRunner는 보행이
-"충분히 학습됐는지"를 자동으로 판정하는 기능이 없다(PPO 학습은 통상 이렇다).
-
-멀티 GPU 장비에서 특정 GPU 하나에 학습을 몰아넣고 싶으면 --device cuda:N을 쓴다(AppLauncher 표준
-인자, 이 저장소의 다른 tools/ 스크립트와 동일한 방식) - env(PhysX·렌더링)와 rsl_rl 학습 러너(정책망·
-PPO 옵티마이저) 둘 다 그 GPU로 맞춘다. rsl_rl의 RslRlOnPolicyRunnerCfg.device 기본값이 "cuda:0"으로
-고정돼 있어서(재클론해 확인: isaaclab_rl/rsl_rl/rl_cfg.py) --device만으로는 env만 옮겨가고 러너는
-그대로 cuda:0에 남는 문제가 있었다 - agent_cfg.build_agent_cfg()에 device를 명시적으로 넘겨 고쳤다.
+멀티 GPU 장비에서 특정 GPU 하나에 학습을 몰아넣고 싶으면 --device cuda:N을 쓴다 - 부모가 그 값을
+자식에게 그대로 넘겨 env(PhysX)와 rsl_rl 학습 러너(정책망·PPO 옵티마이저) 둘 다 그 GPU로 맞춘다.
 
 사용법:
+    # 처음부터(stage 0, 평지) 커리큘럼 시작
     /workspace/isaaclab/isaaclab.sh -p tools/03_controller_rl.py --robot-id unitree_go2
-    /workspace/isaaclab/isaaclab.sh -p tools/03_controller_rl.py --robot-id unitree_g1
-    /workspace/isaaclab/isaaclab.sh -p tools/03_controller_rl.py --robot-id unitree_g1 --device cuda:1
 
-    # 학습 발산 등으로 중단됐을 때 마지막 체크포인트에서 이어학습
-    /workspace/isaaclab/isaaclab.sh -p tools/03_controller_rl.py --robot-id unitree_b2 \
-        --resume-from data/sim/policies/legged/_train_logs/multi-legged_unitree_b2/model_1350.pt
+    # 커리큘럼이 중간에 끊겼을 때(발산·정전 등) 특정 단계 체크포인트에서 이어서
+    /workspace/isaaclab/isaaclab.sh -p tools/03_controller_rl.py --robot-id unitree_go2 \
+        --start-stage 3 --resume-from data/sim/policies/legged/_train_logs/multi-legged_unitree_go2/stage2/converged.pt
+
+    # 실험용 다른 preset으로
+    /workspace/isaaclab/isaaclab.sh -p tools/03_controller_rl.py --robot-id unitree_go2 --preset my_variant
+
+    # 단계 하나만 따로 학습(부모가 내부적으로 쓰는 형태 - 디버깅용으로 직접 써도 된다)
+    /workspace/isaaclab/isaaclab.sh -p tools/03_controller_rl.py --robot-id unitree_go2 --stage 1
 """
 
 import argparse
 import sys
+import traceback
 from pathlib import Path
-
-from isaaclab.app import AppLauncher
 
 # 워크스페이스 루트를 sys.path에 추가해 scripts/, configs/ 를 패키지로 임포트할 수 있게 한다
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
 
-parser = argparse.ArgumentParser(description="legged 로봇 RL 보행 정책 학습")
-parser.add_argument("--robot-id", type=str, required=True, help="data/sim/usd/real_robot/legged/ 안의 robot_id")
-parser.add_argument("--num-envs", type=int, default=None, help="병렬 env 수 (생략 시 로봇 yaml의 agent.num_envs)")
-parser.add_argument("--max-iterations", type=int, default=None, help="학습 반복 횟수 (생략 시 로봇 yaml의 agent.max_iterations)")
-parser.add_argument(
-    "--resume-from",
-    type=str,
-    default=None,
-    help="처음부터가 아니라 이 체크포인트(_train_logs/{experiment_name}/model_N.pt)에서 이어서 학습한다"
-    " - 학습 발산 등으로 중단됐을 때 마지막 정상 체크포인트부터 재개하는 용도.",
-)
-AppLauncher.add_app_launcher_args(parser)
-args_cli, _ = parser.parse_known_args()
-args_cli.headless = True
-args_cli.enable_cameras = False  # 학습 중에는 렌더링을 절대 켜지 않는다(모듈 docstring 참고)
-
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
-
-# AppLauncher 기동 이후에만 isaaclab 의존 모듈(및 pxr를 쓰는 usd_export_config)을 임포트할 수 있다
-from isaaclab.envs import ManagerBasedRLEnv  # noqa: E402
-from isaaclab.utils.io import dump_yaml  # noqa: E402
-from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, export_policy_as_jit  # noqa: E402
-from rsl_rl.runners import OnPolicyRunner  # noqa: E402
-
-from scripts.sim.controller.legged.rl.agent_cfg import build_agent_cfg  # noqa: E402
-from scripts.sim.controller.legged.rl.loco_rl_env import build_loco_rl_env_cfg  # noqa: E402
-from scripts.sim.controller.legged.rl.robot_profile import RobotProfile  # noqa: E402
-from scripts.sim.utils.usd_export_config import export_legged_robot_config  # noqa: E402
-
-_USD_ROOT = _REPO_ROOT / "data" / "sim" / "usd" / "real_robot" / "legged"
-_ROBOT_CONFIG_ROOT = _REPO_ROOT / "configs" / "robots" / "legged"
-_POLICY_ROOT = _REPO_ROOT / "data" / "sim" / "policies" / "legged"
+_ENTRY_POINT = Path(__file__).resolve()
+_KEYBOARD_INTERRUPT_EXIT_CODE = 130
 
 
-def _resolve_robot_type(robot_id: str) -> str:
-    """robot_id의 usd가 실제로 있는 폴더(multi-legged/humanoid)를 찾아 그대로 로봇 종류로 쓴다."""
-    for robot_type in ("multi-legged", "humanoid"):
-        if (_USD_ROOT / robot_type / f"{robot_id}.usd").exists():
-            return robot_type
-    raise FileNotFoundError(
-        f"{robot_id}.usd를 data/sim/usd/real_robot/legged/{{multi-legged,humanoid}}/ 어디서도 찾지 못했습니다."
+def _add_shared_args(parser: argparse.ArgumentParser) -> None:
+    """지휘 모드와 단계 모드가 함께 쓰는 인자."""
+    parser.add_argument(
+        "--robot-id", type=str, required=True, help="configs/robots/legged/multi-legged/ 안의 robot_id"
+    )
+    parser.add_argument("--preset", type=str, default=None, help="RL 설계 번들 이름 (생략 시 robot yaml의 rl_preset)")
+    parser.add_argument("--num-envs", type=int, default=None, help="병렬 env 수 (생략 시 preset의 num_envs)")
+    parser.add_argument(
+        "--resume-from",
+        type=str,
+        default=None,
+        help="시작 단계를 이 체크포인트(stage{N}/model_*.pt 또는 converged.pt)의 가중치에서 이어 시작한다.",
     )
 
 
-def _ensure_robot_config(robot_type: str, robot_id: str) -> None:
-    """config yaml이 없으면 usd 구조 분석만으로 자동 생성한다 - 스폰·물리 시뮬레이션이 필요 없다."""
-    config_path = _ROBOT_CONFIG_ROOT / robot_type / f"{robot_id}.yaml"
-    if config_path.exists():
-        return
-
-    print(f"[controller_rl] {robot_id} config 없음 - usd에서 자동 추출")
-    usd_path = _USD_ROOT / robot_type / f"{robot_id}.usd"
-    export_legged_robot_config(usd_path, robot_type, config_path)
+def _is_stage_worker(argv: list[str]) -> bool:
+    """--stage가 주어졌는지 - 주어졌으면 단계 모드(시뮬레이터 기동)다."""
+    return any(arg == "--stage" or arg.startswith("--stage=") for arg in argv)
 
 
-def main() -> None:
-    """robot_id의 종류를 판별하고 config를 준비해 env·agent cfg를 조립한 뒤, 헤드리스로 학습을 돌린다."""
-    robot_type = _resolve_robot_type(args_cli.robot_id)
-    _ensure_robot_config(robot_type, args_cli.robot_id)
+def _run_curriculum() -> None:
+    """지휘 모드 - 시뮬레이터 없이 단계마다 이 진입점을 자식 프로세스로 다시 띄운다."""
+    parser = argparse.ArgumentParser(description="legged 로봇 RL 보행 정책 학습 (자동 커리큘럼)")
+    _add_shared_args(parser)
+    parser.add_argument("--start-stage", type=int, default=0, help="커리큘럼을 이 단계부터 시작 (재개용, 기본 0)")
+    # 단계 모드에서는 AppLauncher가 같은 이름의 인자를 정의하므로, 여기서만 직접 선언한다
+    parser.add_argument("--device", type=str, default="cuda:0", help="env·학습 러너가 함께 쓸 장치 (예: cuda:1)")
+    args, _ = parser.parse_known_args()
 
-    # 로봇 yaml 하나(RobotProfile)가 env cfg와 agent cfg 양쪽에 필요한 축 선언을 전부 담고 있다
-    profile = RobotProfile.load(robot_type, args_cli.robot_id)
-    num_envs = args_cli.num_envs or profile.agent.get("num_envs", 4096)
-    if args_cli.max_iterations is not None:
-        profile.agent["max_iterations"] = args_cli.max_iterations
+    from scripts.sim.controller.legged.rl.curriculum_driver import CurriculumDriver
 
-    # 로봇별 env cfg 조립 - 지형·로봇 USD·보상 세트가 여기서 전부 하나로 묶인다
-    print(f"[controller_rl] {robot_type}/{args_cli.robot_id} env 조립 중 (num_envs={num_envs})...")
-    env_cfg = build_loco_rl_env_cfg(robot_type, args_cli.robot_id, num_envs=num_envs)
-    env_cfg.sim.device = args_cli.device
-    env = ManagerBasedRLEnv(cfg=env_cfg)
+    CurriculumDriver(
+        entry_point=_ENTRY_POINT,
+        robot_id=args.robot_id,
+        preset_name=args.preset,
+        num_envs=args.num_envs,
+        device=args.device,
+        start_stage=args.start_stage,
+        resume_checkpoint=args.resume_from,
+    ).run()
 
-    experiment_name = f"{robot_type}_{args_cli.robot_id}"
-    agent_cfg = build_agent_cfg(profile, experiment_name, device=args_cli.device)
 
-    # PPO 러너 조립 - 로그는 정책 산출물과 분리해 별도 학습 로그 디렉터리에 남긴다
-    vec_env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
-    log_dir = str(_POLICY_ROOT / "_train_logs" / experiment_name)
-    runner = OnPolicyRunner(vec_env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+def _run_stage() -> None:
+    """단계 모드 - Isaac Sim을 띄우고 --stage 하나만 학습한 뒤 종료 코드로 성패를 알린다."""
+    from isaaclab.app import AppLauncher
 
-    max_iterations = profile.agent["max_iterations"]
-    if args_cli.resume_from is not None:
-        # OnPolicyRunner.load()가 current_learning_iteration을 체크포인트 값으로 채운다 - learn()의
-        # num_learning_iterations는 "총 목표"가 아니라 "이번 호출에서 더 돌릴 횟수"라서, 남은
-        # 횟수(max_iterations - current_learning_iteration)를 직접 계산해 넘겨야 목표를 넘기지 않는다.
-        runner.load(args_cli.resume_from)
-        remaining_iterations = max_iterations - runner.current_learning_iteration
-        print(
-            f"[controller_rl] {args_cli.resume_from}에서 이어학습 - "
-            f"iteration {runner.current_learning_iteration} -> {max_iterations} (남은 {remaining_iterations}회)"
-        )
-    else:
-        remaining_iterations = max_iterations
-        print(f"[controller_rl] 학습 시작 - max_iterations={max_iterations} (헤드리스, 렌더링 없음)")
-    print(f"[controller_rl] 진행 상황: tensorboard --logdir {log_dir}")
+    parser = argparse.ArgumentParser(description="legged 로봇 RL 커리큘럼 단계 하나 학습")
+    _add_shared_args(parser)
+    parser.add_argument("--stage", type=int, required=True, help="학습할 커리큘럼 단계 (0=평지)")
+    AppLauncher.add_app_launcher_args(parser)
+    args, _ = parser.parse_known_args()
+    args.headless = True
+    args.enable_cameras = False  # 학습 중에는 렌더링을 절대 켜지 않는다(모듈 docstring 참고)
+
+    app_launcher = AppLauncher(args)
+    simulation_app = app_launcher.app
+
+    exit_code = 0
     try:
-        runner.learn(num_learning_iterations=remaining_iterations, init_at_random_ep_len=True)
-    except RuntimeError as exc:
-        # PPO가 발산하면(보상 폭주 -> 가치함수 발산 -> 정책 표준편차 NaN) rsl_rl이 이 시점에서
-        # RuntimeError를 던진다 - 정책을 내보내지 않고 즉시 멈춰 GPU 시간을 더 낭비하지 않는다.
-        # save_interval마다 저장된 체크포인트(model_*.pt)는 log_dir에 그대로 남아있다.
-        print(f"\n[controller_rl] 학습 발산으로 중단 (iteration {runner.current_learning_iteration} 근처): {exc}")
-        print(f"[controller_rl] 직전 체크포인트: {log_dir}/model_*.pt - config·하이퍼파라미터를 재점검하세요.")
-        env.close()
-        raise
+        # AppLauncher 기동 이후에만 isaaclab 의존 모듈을 임포트할 수 있다
+        from scripts.sim.controller.legged.rl.rl_trainer import StageSession
 
-    # 학습된 정책을 jit로 내보내 04_controller_test.py의 LocoRunner가 바로 로드할 수 있게 한다
-    print("[controller_rl] 학습 종료 - 정책 jit 변환 및 저장 중...")
-    policy_nn = runner.alg.policy
-    normalizer = getattr(policy_nn, "actor_obs_normalizer", None)
-    output_dir = _POLICY_ROOT / robot_type / args_cli.robot_id
-    output_dir.mkdir(parents=True, exist_ok=True)
-    export_policy_as_jit(policy_nn, normalizer=normalizer, path=str(output_dir), filename="policy.pt")
-    dump_yaml(str(output_dir / "train_config.yaml"), agent_cfg)
-    print(f"[controller_rl] 저장 완료: {output_dir}")
-    print("[controller_rl] 학습된 정책 구동 확인은 tools/04_controller_test.py를 별도로 실행하세요.")
-
-    env.close()
+        with StageSession(
+            robot_id=args.robot_id,
+            stage=args.stage,
+            preset_name=args.preset,
+            num_envs=args.num_envs,
+            device=args.device,
+            resume_checkpoint=args.resume_from,
+        ) as session:
+            session.run()
+    except KeyboardInterrupt:
+        print(f"\n[stage] 사용자 중단 - stage {args.stage} 종료", flush=True)
+        exit_code = _KEYBOARD_INTERRUPT_EXIT_CODE
+    except Exception:  # noqa: BLE001 - 어떤 실패든 앱을 닫고 종료 코드로 부모에게 알려야 한다
+        traceback.print_exc()
+        exit_code = 1
+    finally:
+        # 이 호출을 건너뛰면 Kit의 스레드가 살아남아 프로세스가 GPU를 잡은 채 끝나지 않는다
+        simulation_app.close()
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
-    main()
-    simulation_app.close()
+    if _is_stage_worker(sys.argv[1:]):
+        _run_stage()
+    else:
+        _run_curriculum()

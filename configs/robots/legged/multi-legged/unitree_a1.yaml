@@ -1,49 +1,70 @@
+# Isaac Lab 공식 UNITREE_A1_CFG를 그대로 반영 - 물리적 사실만 여기 담는다.
+# URDF의 "base" 링크는 질량 0짜리 더미 참조 프레임이다(visual만 있고 inertial/collision 없음).
+# 실제 몸통은 "trunk" 링크다 - Isaac Lab 공식 config/a1/rough_env_cfg.py도 height_scanner/
+# add_base_mass/base_contact를 전부 trunk에 건다.
 usd_path: unitree_a1.usd
-base_body_name: base
+base_body_name: trunk
 foot_body_names: FL_foot|FR_foot|RL_foot|RR_foot
 undesired_contact_body_names: FL_calf|FR_calf|RL_calf|RR_calf
+hip_joint_names: .*_hip_joint
 actuator:
-  type: simple
+  model: dc_motor
   stiffness: 25.0
   damping: 0.5
-action:
-  type: position_only
-  scale: 0.25
-rewards:
-- name: track_lin_vel_xy_exp
-  weight: 1.5
-- name: track_ang_vel_z_exp
-  weight: 0.75
-- name: lin_vel_z_l2
-  weight: -2.0
-- name: ang_vel_xy_l2
-  weight: -0.05
-- name: dof_torques_l2
-  weight: -0.0002
-- name: dof_acc_l2
-  weight: -2.5e-07
-- name: action_rate_l2
-  weight: -0.01
-- name: feet_air_time_multi
-  weight: 0.01
-  params:
-    threshold: 0.5
+  effort_limit: 33.5
+  saturation_effort: 33.5
+  velocity_limit: 21.0
+# 스폰 시 베이스 높이(m) - Isaac Lab 공식 UNITREE_A1_CFG.init_state.pos 값 그대로.
+# 비워두면 usd의 authored 자세 bbox로 추정하는데, 이 로봇의 기본 자세는 웅크린 자세라
+# 추정값이 몇 cm 높게 잡혀 리셋마다 낙하한다.
+spawn_height: 0.42
+action_scale: 0.25
+# Isaac Lab 공식 UNITREE_A1_CFG.init_state.joint_pos 그대로
+default_joint_pos_complete: true
 default_joint_pos:
-  FL_calf_joint: -1.80642
-  FR_calf_joint: -1.80642
-  RL_calf_joint: -1.80642
-  RR_calf_joint: -1.80642
-termination:
-- contact
-policy_architecture: mlp
-algorithm: ppo
-domain_randomization: basic
+  .*L_hip_joint: 0.1
+  .*R_hip_joint: -0.1
+  FL_thigh_joint: 0.8
+  FR_thigh_joint: 0.8
+  RL_thigh_joint: 1.0
+  RR_thigh_joint: 1.0
+  .*_calf_joint: -1.5
+# Isaac Lab 공식 config/a1/rough_env_cfg.py 오버라이드 그대로
+domain_randomization:
+  reset_joint_position_range: [1.0, 1.0]
+  push_robot: false
+  reset_base_velocity_range:
+    x: [0.0, 0.0]
+    y: [0.0, 0.0]
+    z: [0.0, 0.0]
+    roll: [0.0, 0.0]
+    pitch: [0.0, 0.0]
+    yaw: [0.0, 0.0]
+  add_base_mass:
+    range: [-1.0, 3.0]
+    operation: add
+# light_quadruped: 가볍고 토크가 작은 4족이라 undesired_contacts(허벅지·정강이 접촉 벌점)를 켜두면
+# 정상 보행 중의 스침까지 벌점 먹어 "안 움직이는" local optimum에 빠진다 - Isaac Lab 공식
+# config/a1/rough_env_cfg.py도 이 항목을 끈다(scripts/.../rl/rewards.py의 LightQuadrupedRewards).
+reward_type: light_quadruped
+# track_lin_vel_xy_exp/track_ang_vel_z_exp/feet_air_time/dof_torques_l2는 Isaac Lab 공식
+# config/a1/rough_env_cfg.py가 부모(velocity_env_cfg.py) 기본값 위에 실제로 거는 오버라이드 값
+# 그대로(1.5/0.75/0.01/-0.0002 - a1 실제 토크 스케일 33.5N·m에 맞춘 값). 나머지(lin_vel_z_l2 등)는
+# 공식이 안 건드리는 부모 기본값 그대로. feet_stumble/hip_pos는 Isaac Lab 공식에 없는 이 프로젝트의
+# Extreme Parkour 포팅 항목이라 대조할 공식 값이 없음 - 기존에 쓰던 값을 유지한다.
+reward_weights:
+  track_lin_vel_xy_exp: 1.5
+  track_ang_vel_z_exp: 0.75
+  lin_vel_z_l2: -2.0
+  ang_vel_xy_l2: -0.05
+  dof_torques_l2: -0.0002
+  dof_acc_l2: -2.5e-7
+  action_rate_l2: -0.01
+  feet_air_time: 0.01
+  feet_stumble: -1.0
+  hip_pos: -0.5
 agent:
   num_envs: 4096
   max_iterations: 1500
   learning_rate: 0.001
   entropy_coef: 0.01
-  hidden_dims:
-  - 512
-  - 256
-  - 128

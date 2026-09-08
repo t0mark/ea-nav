@@ -26,10 +26,10 @@ class AckermannKinematics(RobotController):
         """앞뒤 차축 간 거리(wheelbase), 좌우 바퀴 간 거리(track_width), 바퀴 반지름, 구동 바퀴 개수를 저장한다.
 
         direction_sign(구동)과 steering_sign(조향)을 따로 둔다 - USD에 authored된 구동 바퀴 축
-        방향과 조향 관절 축 방향은 서로 다른 문제라 독립적으로 어긋날 수 있다(diff/omni에서도 이미
-        확인된 패턴 - 전진 방향과 회전 방향의 부호가 서로 무관하게 반대로 나올 수 있었다). 조향각
-        계산 자체(steering_angle)는 목표 곡률에서 나오는 순수 기하량이라 그대로 두고, 실제 관절에
-        내보내는 최종 값(구동 속도·조향각)에만 각 부호를 곱해 보정한다.
+        방향과 조향 관절 축 방향은 서로 무관하게 어긋날 수 있다(diff/omni의 direction_sign/
+        rotation_sign 분리와 같은 이유). 조향각 계산 자체(steering_angle)는 목표 곡률에서 나오는
+        순수 기하량이라 그대로 두고, 실제 관절에 내보내는 최종 값(구동 속도·조향각)에만 각 부호를
+        곱해 보정한다.
         """
         self._wheelbase = wheelbase
         self._track_width = track_width

@@ -26,10 +26,9 @@ class DifferentialDriveKinematics(RobotController):
         """바퀴 반지름(m), 좌우 바퀴 중심 간 거리(m), 좌/우 바퀴 개수를 저장한다.
 
         direction_sign(전진)과 rotation_sign(회전)을 따로 둔다 - USD에 authored된 바퀴 관절 회전축
-        방향은 "양수 각속도 = 전진"과 "양수 각속도 차이 = 좌회전"을 독립적으로 어긋나게 만들 수 있다
-        (관측됨: fraunhofer_evobot - direction_sign만 보정해도 회전은 여전히 반대 방향으로 나옴,
-        w=+1을 줬는데 실제 yaw는 -0.91rad로 반대 방향 회전). 실측 기반으로 usd_export_config.py가
-        둘을 따로 재서 config에 저장한다.
+        방향에 따라 "양수 각속도 = 전진"과 "양수 각속도 차이 = 좌회전"이 독립적으로 어긋날 수 있어,
+        한쪽만 보정하면 다른 쪽이 여전히 반대로 돈다. usd_export_config.py가 둘을 각각 실측해
+        config에 저장한다.
         """
         self._wheel_radius = wheel_radius
         self._wheel_base = wheel_base

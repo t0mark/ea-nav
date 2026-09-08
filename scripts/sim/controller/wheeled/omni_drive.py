@@ -25,9 +25,8 @@ class OmniDriveKinematics(RobotController):
         """바퀴 반지름과, 로봇 중심에서 앞/뒤 축까지·좌/우 바퀴까지의 절반 거리를 저장한다.
 
         direction_sign(전진/횡이동)과 rotation_sign(회전)은 따로 둔다 - 메카넘 롤러 배치(X자형/O자형)에
-        따라 회전 반응만 반대로 나오는 로봇이 있어(관측됨: fraunhofer_o3dyn은 전진은 맞는데 회전만
-        반대) 둘을 하나의 부호로 묶으면 한쪽을 고치다 다른 쪽이 깨진다. usd_export_config.py가 각각
-        독립적으로 실측해 config에 저장한다.
+        따라 전진은 맞는데 회전 반응만 반대로 나올 수 있어, 둘을 하나의 부호로 묶으면 한쪽을
+        맞추다 다른 쪽이 깨진다. usd_export_config.py가 각각 독립적으로 실측해 config에 저장한다.
         """
         self._wheel_radius = wheel_radius
         self._lateral_sum = half_wheelbase + half_track_width

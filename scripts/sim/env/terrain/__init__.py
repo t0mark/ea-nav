@@ -1,6 +1,1 @@
-"""RL 학습·시각 검증 공용 지형 패키지의 공개 API."""
-
-from .generator_cfg import load_terrain_generator_cfg
-from .scene_builder import TerrainSceneBuilder
-
-__all__ = ["TerrainSceneBuilder", "load_terrain_generator_cfg"]
+"""지형 생성 모듈 (파쿠르 서브 지형 타입 포함)."""

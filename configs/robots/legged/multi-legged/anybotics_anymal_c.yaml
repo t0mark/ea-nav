@@ -1,52 +1,65 @@
-# IsaacLab 공식(anymal_c/rough_env_cfg.py, base는 velocity_env_cfg.py 그대로) + legged_gym
-# anymal_c_rough_config.py를 재클론해 재검증 후 반영했다. undesired_contact_body_names가
-# shank_fixed(정강이)로 잘못돼 있던 것을 로컬 URDF 대조로 확인해 thigh_fixed(허벅지 - THIGH/SHANK
-# 링크 자체는 collision이 없고 별도 "_fixed" 프록시에만 있음)로 고쳤다. damping도 legged_gym
-# 실측값(2.0)으로 맞췄다. flat_orientation_l2/dof_pos_limits는 IsaacLab rough 기본값이 0.0
-# (비활성)이라 제거. ANYmal 공식 액추에이터는 학습된 LSTM 액추에이터망이라 단순 PD로는 재현
-# 불가능 - stiffness/damping은 legged_gym의 단순 PD 근사치(구조 자체가 다름)를 쓴다.
+# Isaac Lab 공식 ANYMAL_C_CFG를 그대로 반영 - 물리적 사실만 여기 담는다.
+# 공식 anymal_c/rough_env_cfg.py는 부모(velocity_env_cfg.py) 설정을 아무 것도 오버라이드하지 않고
+# 로봇만 바꾼다 - anymal_d와 완전히 같은 구조라 보상·이벤트·액션 값이 전부 동일하다.
+# 액추에이터는 공식이 쓰는 ANYDRIVE_3_LSTM_ACTUATOR_CFG(학습된 신경망 모델)를 이 프로젝트 골격
+# (implicit/dc_motor)으로 재현할 수 없어, 같은 파일의 폴백 DC 모터 값(ANYDRIVE_3_SIMPLE_ACTUATOR_CFG)을
+# 그대로 쓴다 - anymal_d와 같은 처리라 두 ANYmal의 embodiment 비교가 성립한다.
+# 학습 설계는 rl_preset이 가리키는 configs/rl/legged/presets/baseline.yaml 이 정한다.
+rl_preset: baseline
 usd_path: anybotics_anymal_c.usd
 base_body_name: base
+# 이 USD는 URDF의 fixed joint를 병합하지 않아 FOOT/thigh_fixed가 별도 강체로 남아 있다(실측: 강체 59개).
+# URDF에서 THIGH/SHANK 링크에는 collision이 없고 "_fixed" 프록시 링크에만 있으므로, 접촉을 읽어야 하는
+# 바디는 반드시 collision을 가진 쪽을 가리켜야 한다 - 공식이 쓰는 `.*THIGH`는 이 USD에서 접촉이 잡히지
+# 않는다(anymal_d의 USD는 반대로 fixed joint를 병합해 THIGH가 collision을 물려받아 그대로 쓴다).
 foot_body_names: LF_FOOT|LH_FOOT|RF_FOOT|RH_FOOT
 undesired_contact_body_names: LF_thigh_fixed|LH_thigh_fixed|RF_thigh_fixed|RH_thigh_fixed
+hip_joint_names: .*HAA
 actuator:
-  type: simple
-  stiffness: 80.0
-  damping: 2.0
-action:
-  type: position_only
-  scale: 0.5
-rewards:
-- name: track_lin_vel_xy_exp
-  weight: 1.0
-- name: track_ang_vel_z_exp
-  weight: 0.5
-- name: lin_vel_z_l2
-  weight: -2.0
-- name: ang_vel_xy_l2
-  weight: -0.05
-- name: dof_torques_l2
-  weight: -1.0e-05
-- name: dof_acc_l2
-  weight: -2.5e-07
-- name: action_rate_l2
-  weight: -0.01
-- name: feet_air_time_multi
-  weight: 0.125
-  params:
-    threshold: 0.5
-- name: undesired_contacts
-  weight: -1.0
-  params:
-    threshold: 1.0
-termination:
-- contact
-policy_architecture: mlp
-algorithm: ppo
-domain_randomization: basic
+  model: dc_motor  # ANYDRIVE_3_SIMPLE_ACTUATOR_CFG 값 그대로 - 토크·속도 포화가 있는 실제 모터 모델
+  stiffness: 40.0
+  damping: 5.0
+  effort_limit: 80.0
+  saturation_effort: 120.0
+  velocity_limit: 7.5
+# 스폰 시 베이스 높이(m) - Isaac Lab 공식 ANYMAL_C_CFG.init_state.pos 값 그대로.
+# 비워두면 usd의 authored 자세 bbox로 추정하는데, 이 로봇의 기본 자세는 웅크린 자세라
+# 추정값이 몇 cm 높게 잡혀 리셋마다 낙하한다.
+spawn_height: 0.60
+action_scale: 0.5
+# Isaac Lab 공식 ANYMAL_C_CFG.init_state.joint_pos 그대로 - 앞다리/뒷다리 HFE·KFE 부호가 반대라
+# 굽힌 자세로 선다.
+default_joint_pos_complete: true
+default_joint_pos:
+  .*HAA: 0.0
+  .*F_HFE: 0.4
+  .*H_HFE: -0.4
+  .*F_KFE: -0.8
+  .*H_KFE: 0.8
+# anymal_c/rough_env_cfg.py는 부모(velocity_env_cfg.py) 이벤트를 하나도 오버라이드하지 않는다 -
+# 공식 기본값(덧셈 -5~+5kg)을 그대로 쓴다.
+domain_randomization:
+  add_base_mass:
+    range: [-5.0, 5.0]
+    operation: add
+# standard_quadruped: 무겁고 토크가 큰 4족이라 undesired_contacts(허벅지 접촉 벌점)를 켜도 정상
+# 보행에 지장이 없다 - 공식 anymal_c/rough_env_cfg.py는 이 항목을 포함해 부모 보상 기본값을 아무
+# 것도 오버라이드하지 않는다(scripts/.../rl/rewards.py의 StandardQuadrupedRewards).
+# 아래 숫자는 전부 그 부모 기본값 그대로. feet_stumble/hip_pos는 공식에 없는 이 프로젝트의
+# Extreme Parkour 포팅 항목이라 anymal_d와 같은 값을 쓴다.
+reward_type: standard_quadruped
+reward_weights:
+  track_lin_vel_xy_exp: 1.0
+  track_ang_vel_z_exp: 0.5
+  lin_vel_z_l2: -2.0
+  ang_vel_xy_l2: -0.05
+  dof_torques_l2: -1.0e-5
+  dof_acc_l2: -2.5e-7
+  action_rate_l2: -0.01
+  feet_air_time: 0.125
+  undesired_contacts: -1.0
+  feet_stumble: -1.0
+  hip_pos: -0.5
+# preset.algorithm 기본값 위에 anymal 계열만 다른 키를 덮어쓴다(공식 anymal_c가 쓰는 낮은 entropy).
 agent:
-  num_envs: 4096
-  max_iterations: 1500
-  learning_rate: 0.001
   entropy_coef: 0.005
-  hidden_dims: [512, 256, 128]
