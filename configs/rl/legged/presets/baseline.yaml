@@ -8,9 +8,8 @@
 # 각 로직 키는 scripts/sim/controller/legged/rl/{모듈}.py 의 레지스트리(OBSERVATION_SETS / REWARD_SETS /
 # TERMINATION_SETS / EVENT_SETS / ACTION_BUILDERS)에 등록된 이름이어야 한다.
 
-observations: proprio_heightscan     # 고유 감각 + height scan
-rewards: rudin_parkour               # Rudin et al. 표준 9종 + Extreme Parkour 계단 전용 2종
-                                     #  (light/standard 접촉 페널티 분기는 robot yaml의 reward_type이 정함)
+observations: proprio_heightscan_contact  # 고유 감각 + height scan + 발 접촉 상태
+rewards: rudin_parkour               # Rudin et al. 표준 9종(자세·수직속도는 지형 기준) + Extreme Parkour 계단 전용 2종
 terminations: base_contact           # 몸통(base) 이상 접촉 시 종료 (+ time_out은 코드가 항상 추가)
 events: sim2real_default             # 마찰·질량·초기 상태·외란 도메인 랜덤화
 action: joint_position              # 전 관절 위치제어
@@ -18,7 +17,7 @@ action: joint_position              # 전 관절 위치제어
 num_envs: 4096                       # 병렬 env 수 (tools/03_controller_rl.py --num-envs로 덮어쓸 수 있음)
 
 # ---- PPO 러너 하이퍼파라미터 (Rudin et al., CoRL 2021/2022, arXiv:2109.11978 표준값) ----
-# robot yaml에 agent: 블록이 있으면 그 키가 아래 값을 덮어쓴다(로봇별로 꼭 필요한 경우만 - 예: anymal 계열 entropy_coef).
+# robot yaml에 agent: 블록이 있으면 그 키가 아래 값을 덮어쓴다 - 4족 12종은 오버라이드 없이 이 값을 그대로 쓴다.
 algorithm:
   hidden_dims: [512, 256, 128]
   activation: elu
@@ -26,7 +25,15 @@ algorithm:
   learning_rate: 1.0e-3
   schedule: adaptive
   desired_kl: 0.01
-  entropy_coef: 0.01
+  # 0.01은 Isaac Lab이 Unitree 계열에 쓰는 공식값이지만 이 커리큘럼에서는 정책이 무너진다.
+  # 엔트로피 항은 정책 표준편차 std를 키우는 방향으로 손실에 들어가는데(rsl_rl ppo.py:315),
+  # 이 프로젝트는 전 env가 같은 좁은 난이도 구간을 봐서 과제가 균일하게 어렵고, 성능이 정체되면
+  # surrogate 신호가 약해져 엔트로피 항이 지배한다. std가 커지면 그 노이즈가 그대로 action_rate_l2
+  # 페널티로 들어가 보상이 음수가 되고, 성능이 더 나빠져 std가 또 커지는 양의 되먹임이 생긴다
+  # (실측: go2가 std 0.68 -> 1.40, action_rate -0.097 -> -0.260, 평균 보상 -0.01 -> -2.58로 붕괴).
+  # 공식이 0.01로 되는 건 env마다 terrain level이 달라 항상 쉬운 env가 섞여 신호가 끊기지 않기
+  # 때문이다. 같은 지형에서 0.005인 ANYmal 계열은 std가 1.00 -> 0.5로 정상 수렴한다.
+  entropy_coef: 0.005
   value_loss_coef: 1.0
   clip_param: 0.2
   num_learning_epochs: 5
@@ -38,31 +45,48 @@ algorithm:
   save_interval: 50
   # max_iterations 없음 - 학습 종료는 커리큘럼(수렴/정체/단계상한)이 정한다.
 
-# ---- 커리큘럼: 쉬운 환경(평지)부터 시작 -> 수렴 판정 -> 다음 난이도 -> 수렴 실패까지 반복 ----
+# ---- 커리큘럼: 평지에서 시작 -> 축별 승급 판정 -> 조건을 채운 축만 난이도 상승 ----
 curriculum:
-  # stage 번호 -> 지형 난이도 구간 (scripts/sim/env/curriculum/stage_env.py)
-  # stage 1은 [base, base+increment], stage 2는 [base+increment, base+2*increment] ... 선형 증가
+  # 난이도 축은 오르막 단차·내리막 단차·오르막 경사·내리막 경사·파쿠르 단차 다섯이고 각자 레벨을
+  # 가진다. 지형에는 다섯 축이 항상 함께 들어가되, 지형 종류가 스폰 지점의 높낮이를 뒤집어 오르내림을
+  # 가른다(계단은 pyramid_stairs가 내리막·inverted가 오르막, 경사면도 같은 구조). 계단·parkour 타일은
+  # 단차 사다리, 경사면 타일은 경사 사다리의 난이도로 생성된다.
+  # 레벨 N은 [base + (N-1)*increment, base + N*increment] 구간이고, 전 축이 0이면 평지다.
+  # 명령 속도 상한 - env가 서 있는 레벨이 높을수록 낮춘다. 지형이 험해질수록 같은 속도를 유지하는
+  # 것이 물리적으로 불가능해지는데, 상한을 고정하면 "불가능한 명령을 못 따라감"이 "지형을 못 넘음"으로
+  # 잘못 기록된다. 상한을 env별로 두는 이유는 축마다 레벨이 다르기 때문이다 - 공통으로 두면 한 축의
+  # 승급이 다른 축의 과제까지 바꾼다. 평지에서 lin_vel_max_base_mps로 시작해 레벨마다
+  # lin_vel_decay_per_stage_mps씩 줄이고 lin_vel_max_floor_mps에서 멈춘다. 각속도도 같은 비율로 줄인다.
+  command:
+    lin_vel_max_base_mps: 1.0
+    lin_vel_decay_per_stage_mps: 0.05
+    lin_vel_max_floor_mps: 0.3
+
   stage:
-    step_height_base_m: 0.03
-    step_height_increment_m: 0.05
-    slope_base_ratio: 0.10
-    slope_increment_ratio: 0.15
+    step_height_base_m: 0.01
+    step_height_increment_m: 0.025
+    slope_base_ratio: 0.02
+    slope_increment_ratio: 0.07
+    noise_base_m: 0.005
+    noise_increment_m: 0.008
+    noise_step_m: 0.005
 
   # 한 단계 안에서의 학습 진행 - eval_interval_iters 만큼 학습할 때마다 추종 정확도를 확인한다.
   per_stage:
     eval_interval_iters: 50
     max_iterations: 2000               # 이만큼 돌아도 수렴 못 하면 이 단계 포기(=커리큘럼 종료)
 
-  # 수렴 판정: 가중치를 뺀 정규화 추종 보상(mean exp(-err^2/std^2) in [0,1])이 lin·ang 둘 다
-  # threshold 이상인 상태가 patience_evals 회 연속되면 그 단계는 수렴한 것으로 본다.
+  # 수렴 판정: 다섯 축마다 따로 한다. 평가 전용 롤아웃에서 각 env가 밟고 있는 타일의 축으로
+  # 나눠 추종 정확도(exp(-err^2/std^2) x 생존률)를 재고, lin·ang 중 작은 쪽을 그 축의 회차 점수로
+  # 삼는다. 최근 patience_evals 회 평균이 threshold 이상인 축만 다음 레벨로 승급한다.
   convergence:
     metric: track_lin_vel_xy_exp
     metric_secondary: track_ang_vel_z_exp
     threshold: 0.80
     patience_evals: 3
 
-  # 정체 판정: 위 정규화 점수의 best 값이 window_evals 회 동안 min_delta 이상 개선되지 않으면
-  # 이 단계는 더 못 깨는 것으로 보고 커리큘럼을 종료한다(고정 이터레이션 상한과 별개의 조기 종료).
+  # 정체 판정: 다섯 축 모두 best 값이 window_evals 회 동안 min_delta 이상 개선되지 않으면 커리큘럼을
+  # 종료한다(한 축이라도 나아지고 있으면 그 축의 승급 가능성이 남아 있다).
   plateau:
     window_evals: 10
     min_delta: 0.01

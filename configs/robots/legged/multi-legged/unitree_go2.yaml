@@ -5,7 +5,7 @@ rl_preset: baseline
 usd_path: unitree_go2.usd
 base_body_name: base
 foot_body_names: FL_foot|FR_foot|RL_foot|RR_foot
-undesired_contact_body_names: FL_calf|FR_calf|RL_calf|RR_calf
+undesired_contact_body_names: FL_thigh|FR_thigh|RL_thigh|RR_thigh
 hip_joint_names: .*_hip_joint
 actuator:
   model: dc_motor  # 토크·속도 포화가 있는 실제 모터 모델
@@ -50,10 +50,12 @@ domain_randomization:
   add_base_mass:
     range: [-1.0, 3.0]
     operation: add
-# light_quadruped: 가볍고 토크가 작은 4족이라 undesired_contacts(허벅지·정강이 접촉 벌점)를 켜두면
-# 정상 보행 중의 스침까지 벌점 먹어 "안 움직이는" local optimum에 빠진다 - Isaac Lab 공식
-# config/go2/rough_env_cfg.py도 이 항목을 끈다(scripts/.../rl/rewards.py의 LightQuadrupedRewards).
-reward_type: light_quadruped
+# 허벅지·정강이 접촉을 하중 지지로 볼 임계(N) - 체중 16.1kg의 1/4(39N)이다.
+# 이 값 아래의 스침은 벌점이 아니고, 그 부위로 딛고 서는 자세만 걸린다.
+undesired_contact_threshold_n: 39
+# 스윙 중 발이 지면에서 떨어져야 할 목표 높이(m) - 공식 Spot 태스크가 기립 0.5m에 0.10m를
+# 쓰는 비율(스폰 높이의 0.20배)을 이 로봇 스폰 높이 0.4m에 적용한 값이다.
+foot_clearance_target_m: 0.08
 # track_lin_vel_xy_exp/track_ang_vel_z_exp/feet_air_time/dof_torques_l2는 Isaac Lab 공식
 # config/go2/rough_env_cfg.py가 부모(velocity_env_cfg.py) 기본값 위에 실제로 거는 오버라이드
 # 값 그대로(1.5/0.75/0.01/-0.0002 - go2 실제 토크 스케일 23.5N·m에 맞춘 값). 나머지(lin_vel_z_l2 등)는
@@ -64,10 +66,13 @@ reward_weights:
   track_ang_vel_z_exp: 0.75
   lin_vel_z_l2: -2.0
   ang_vel_xy_l2: -0.05
-  dof_torques_l2: -0.0002
+  dof_torques_l2: -2.0e-4
   dof_acc_l2: -2.5e-7
   action_rate_l2: -0.01
   feet_air_time: 0.01
-  feet_stumble: -1.0
+  undesired_contacts: -1.0
+  feet_clearance: -0.1
+  flat_orientation_l2: -1.0
+  feet_stumble: -0.5
   hip_pos: -0.5
 # agent: 블록은 preset.algorithm 기본값과 달라야 하는 키가 있을 때만 둔다(go2는 preset 기본값 그대로라 없음).

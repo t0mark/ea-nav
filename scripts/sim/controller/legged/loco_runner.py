@@ -9,10 +9,15 @@ import torch
 from isaaclab.envs import ManagerBasedRLEnv
 
 from scripts.sim.controller.base import RobotController
-from scripts.sim.controller.legged.rl.loco_rl_env import build_loco_rl_env_cfg
+from scripts.sim.controller.legged.rl.loco_rl_env import build_loco_rl_env_cfg, build_test_terrain_importer_cfg
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _POLICY_ROOT = _REPO_ROOT / "data" / "sim" / "policies" / "legged"
+
+# 씬 지형 - plane은 끝없는 평면(wheeled와 같은 조건), test는 평지 타일과 랜덤 험지 타일이 함께
+# 놓인 격자다. 격자를 쓰면 env를 하나만 만들고도 로봇을 타일 사이로 옮겨 두 조건을 다 볼 수 있다.
+TERRAIN_PLANE = "plane"
+TERRAIN_TEST = "test"
 
 
 class LocoRunner(RobotController):
@@ -25,16 +30,32 @@ class LocoRunner(RobotController):
     평평한 텐서다 - 그룹을 이어붙이는 별도 순서 조립이 필요 없다.
     """
 
-    def __init__(self, category: str, robot_id: str, num_envs: int = 1, device: str = "cuda:0", stage: int = 0) -> None:
+    def __init__(
+        self,
+        category: str,
+        robot_id: str,
+        num_envs: int = 1,
+        device: str = "cuda:0",
+        terrain: str = TERRAIN_PLANE,
+    ) -> None:
         """robot_id의 env cfg를 조립하고, data/sim/policies/legged/{category}/{robot_id}/policy.pt를 로드한다.
 
-        stage 기본값은 0(평지)이다 - LocoRunner는 학습이 아니라 구동 확인/테스트용이고, 그 용도는
-        보통 wheeled와 동일한 조건(평지)에서 이동 명령 추종만 보는 것이라 지형 난이도가 필요 없다.
+        terrain 기본값은 평면이다 - LocoRunner는 학습이 아니라 구동 확인용이고, 기본 용도는 wheeled와
+        동일한 조건에서 이동 명령 추종만 보는 것이라 지형 굴곡이 필요 없다. TERRAIN_TEST를 주면
+        평지·험지 타일 격자를 만들어, move_to_terrain_tile()로 조건을 바꿔 가며 확인할 수 있다.
         category는 build_loco_rl_env_cfg에는 쓰이지 않는다(RobotProfile.load가 robot_id만으로 로봇
         yaml을 찾는다) - 정책 저장 경로(_POLICY_ROOT/{category}/{robot_id})를 rl/rl_trainer.py의
-        StageSession이 policy.pt를 내보내는 경로와 맞추는 데만 쓴다.
+        CurriculumSession이 policy.pt를 내보내는 경로와 맞추는 데만 쓴다.
         """
-        env_cfg = build_loco_rl_env_cfg(robot_id, stage=stage, num_envs=num_envs)
+        if terrain == TERRAIN_TEST:
+            terrain_cfg = build_test_terrain_importer_cfg()
+        elif terrain == TERRAIN_PLANE:
+            terrain_cfg = None
+        else:
+            raise ValueError(f"알 수 없는 지형: {terrain} (가능: {TERRAIN_PLANE}, {TERRAIN_TEST})")
+        env_cfg = build_loco_rl_env_cfg(robot_id, num_envs=num_envs, terrain_cfg=terrain_cfg)
+        # 명령 속도 화살표는 학습 디버깅용이라 구동 확인 영상에서는 화면만 가린다
+        env_cfg.commands.base_velocity.debug_vis = False
         env_cfg.sim.device = device
         self._env = ManagerBasedRLEnv(cfg=env_cfg)
 
@@ -51,6 +72,21 @@ class LocoRunner(RobotController):
         """환경을 리셋하고 첫 관측을 받아 둔다."""
         observation_dict, _ = self._env.reset()
         self._observation = self._concat_policy_observation(observation_dict)
+
+    def move_to_terrain_tile(self, column: int, row: int = 0) -> None:
+        """모든 env를 지정한 지형 타일로 옮기고 리셋한다 - 열은 지형 종류, 행은 난이도다.
+
+        Isaac Lab이 커리큘럼 승급에 쓰는 것과 같은 경로다(TerrainImporter.update_env_origins):
+        타일 원점을 env 원점으로 바꾸면, 다음 리셋에서 리셋 이벤트가 scene.env_origins를 기준으로
+        로봇을 그 타일에 놓는다. 그래서 지형이 다른 조건을 보려고 env를 새로 만들 필요가 없다.
+        """
+        terrain = self._env.scene.terrain
+        if terrain.terrain_origins is None:
+            raise RuntimeError(f"타일 격자가 없는 지형이다 - terrain={TERRAIN_TEST}로 만든 env에서만 쓸 수 있다")
+        terrain.terrain_levels[:] = row
+        terrain.terrain_types[:] = column
+        terrain.env_origins[:] = terrain.terrain_origins[row, column]
+        self.reset()
 
     def compute_joint_targets(
         self, command: torch.Tensor, observation: torch.Tensor | None = None

@@ -9,21 +9,26 @@ name: eatrav
 # 서비스 공통 설정 (sim은 볼륨을 자체 정의하므로 volumes만 덮어씀)
 x-common: &common
   working_dir: /workspace/eatrav
+  # PID 1을 init으로 둔다 - 기본 entrypoint(sleep infinity)는 자식을 회수하지 않아
+  # Isaac Sim이 fork한 프로세스가 끝날 때마다 좀비가 쌓인다
+  init: true
   ipc: host
   restart: unless-stopped
   volumes:
     - ../:/workspace/eatrav
     - /home/jairlab/data:/data
 
-# GPU는 컨테이너에 전부 노출만 하고, 어느 것을 쓸지는 실행할 때 고른다
-# (--device cuda:N / cpu, 또는 docker compose exec -e CUDA_VISIBLE_DEVICES=N). utils는 GPU 미사용
+# 이 프로젝트가 쓰는 GPU만 노출한다 - Isaac Sim은 기동할 때 보이는 GPU를 전부 초기화해
+# 장당 약 550MiB의 CUDA 컨텍스트를 만들므로, 전부 노출하면 쓰지 않는 GPU까지 점유한다.
+# 컨테이너 안에서는 노출된 순서대로 cuda:0~4로 다시 매겨진다
+# (cuda:0->0, cuda:1->1, cuda:2->2, cuda:3->4, cuda:4->5). utils는 GPU 미사용.
 x-gpu: &gpu
   deploy:
     resources:
       reservations:
         devices:
           - driver: nvidia
-            count: all
+            device_ids: ["0", "1", "2", "4", "5"]
             capabilities: [gpu]
 
 services:

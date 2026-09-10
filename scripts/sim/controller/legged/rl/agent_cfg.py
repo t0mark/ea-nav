@@ -4,13 +4,13 @@
 성립한다(학습 설계 동일). robot yaml에 agent: 블록이 있으면 그 키만 preset.algorithm 위에 덮어쓴다
 (로봇별로 꼭 필요한 경우만 - 예: anymal 계열 entropy_coef).
 
-device는 반드시 호출부(rl_trainer.py의 StageSession)가 --device로 받은 값을 그대로 넘겨야 한다 -
+device는 반드시 호출부(rl_trainer.py의 CurriculumSession)가 --device로 받은 값을 그대로 넘겨야 한다 -
 Isaac Lab의 RslRlBaseRunnerCfg.device 기본값이 "cuda:0"으로 고정돼 있어, 여기서 넘기지 않으면
 env(PhysX·렌더링)만 지정한 GPU를 쓰고 학습 러너(정책망·PPO 옵티마이저)는 cuda:0으로 고정돼
 멀티 GPU 장비에서 GPU 지정이 반쪽만 먹는다.
 
 max_iterations는 RslRlOnPolicyRunnerCfg의 필수 필드라 값을 넣긴 하지만(커리큘럼의 단계 상한을 그대로
-재사용), 실제 학습량은 rl_trainer.py의 StageTrainer가 runner.learn(num_learning_iterations=...)로
+재사용), 실제 학습량은 rl_trainer.py의 CurriculumTrainer가 runner.learn(num_learning_iterations=...)로
 매 구간마다 명시적으로 넘기므로 이 값에 의존하지 않는다 - 전역 이터레이션 종료 로직은 없다.
 """
 

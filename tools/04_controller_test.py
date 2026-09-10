@@ -5,11 +5,18 @@ wheeled는 config yaml이 없으면 scripts/sim/utils/usd_export_config.py로 �
 base/foot 링크를 형상만으로 자동 판별할 근거가 약해 자동 추출을 지원하지 않으므로, config가 없는
 로봇은 애초에 테스트 대상에서 제외한다.
 
-테스트 내용은 "평지에서 ㄱ자 웨이포인트 경로를 끝까지 따라가는가" 하나로 통일한다 - 직진만으로는
-조향이 전혀 검증되지 않으므로, scripts/sim/nav의 pure pursuit 추종기로 코너가 있는 경로를 실제로
-쫓아가게 한다. 파일럿(--mode pilot)은 그 결과를 영상(목표 지점 마커 포함)과 궤적 이미지로 남기고
-서브카테고리별 대표 로봇만 돌리며, 본 실행(--mode full)은 그런 산출물 없이 판정만 내리고
-(--robot-id 없으면) 카테고리 전체를 돌린다.
+판정 기준은 "평지에서 ㄱ자 웨이포인트 경로를 끝까지 따라가는가" 하나다 - 직진만으로는 조향이 전혀
+검증되지 않으므로, scripts/sim/nav의 pure pursuit 추종기로 코너가 있는 경로를 실제로 쫓아가게 한다.
+파일럿(--mode pilot)은 그 결과를 영상(목표 지점 마커 포함)과 궤적 이미지로 남기고 서브카테고리별
+대표 로봇만 돌리며, 본 실행(--mode full)은 그런 산출물 없이 판정만 내리고 (--robot-id 없으면)
+카테고리 전체를 돌린다.
+
+legged 파일럿은 여기에 "오르막 계단에서 직진"을 이어서 한 번 더 돌려 영상만 남긴다 - 평지
+경로 추종만으로는 지형 대응이 전혀 보이지 않기 때문이다. 조향도 궤적 이미지도 없고 눈으로 보는
+확인이다. 계단 높이는 그 로봇이 학습에서 깬 단차에서 역산해 로봇마다 같은 의미의 난이도가 되게
+한다. 지형이 다르지만 env는 하나만 만든다: 한 프로세스에서 ManagerBasedRLEnv를 두 번 만들면
+멈추므로(env.close()가 USD prim을 남긴다), 평지 타일과 계단 타일이 함께 있는 격자 지형을 만들어
+두고 로봇을 타일 사이로 옮긴다(Isaac Lab이 커리큘럼 승급을 처리하는 방식과 같다).
 
 사용법:
     # wheeled 파일럿 - 서브카테고리(diff/ackermann/omni)별 대표 로봇만, 영상+궤적 이미지 저장
@@ -80,6 +87,17 @@ _ROBOT_PRIM_PATH = "/World/Robot"
 
 _LEG_LENGTH_M = 1.5  # ㄱ자 경로 한 변의 길이
 _NUM_STEPS = {"pilot": 3000, "full": 3600}
+# 스폰 직후 낙하를 정착시키는 무명령 스텝 수 - 이 자세를 기준으로 카메라 거리를 맞춘다
+_SETTLE_STEPS = 60
+# 오르막 계단 직진 구간 - 명령 속도는 ㄱ자 경로와 같게 두어 두 영상의 조건을 맞추고(추종기
+# 기본값 0.5m/s), 스텝 수는 타일(8m)을 가로지르기 충분한 만큼만 준다
+_STAIRS_LINEAR_VELOCITY = 0.5
+_STAIRS_NUM_STEPS = 600
+# 타일을 옮긴 직후 버리는 프레임 수 - 렌더가 카메라 이동보다 한 프레임 늦어, 첫 프레임에 옮기기
+# 전 장면이 그대로 찍힌다
+_CAMERA_WARMUP_FRAMES = 3
+# 목표 마커를 화면에서 뺄 때 보낼 높이(m) - 지형 아래로 충분히 내린다
+_HIDDEN_MARKER_HEIGHT_M = -50.0
 
 
 def _discover_wheeled_robots() -> list[tuple[str, str, Path]]:
@@ -124,12 +142,19 @@ def _select_robots(all_robots: list, robot_id: str | None, mode: str) -> list:
     return selected
 
 
+def _save_video(output_dir: Path, filename: str, frames: list) -> None:
+    """모은 프레임을 영상으로 저장한다(프레임이 없으면 아무 것도 안 함)."""
+    if not frames:
+        return
+    output_dir.mkdir(parents=True, exist_ok=True)
+    record_frames_to_video(frames, str(output_dir / filename))
+
+
 def _save_check_outputs(output_dir: Path, robot_id: str, frames: list, start, path: Path2D, position_history: list) -> None:
     """파일럿 모드에서 모은 프레임·궤적을 영상·이미지로 저장한다(프레임이 없으면 아무 것도 안 함)."""
     if not frames:
         return
-    output_dir.mkdir(parents=True, exist_ok=True)
-    record_frames_to_video(frames, str(output_dir / f"{robot_id}.mp4"))
+    _save_video(output_dir, f"{robot_id}.mp4", frames)
     save_trajectory_plot([start, *path.waypoints], position_history, output_dir / f"{robot_id}_trajectory.png")
 
 
@@ -147,17 +172,20 @@ class _ChaseCamera:
         extent = tuple(bbox_max[i] - bbox_min[i] for i in range(3))
         diagonal = (extent[0] ** 2 + extent[1] ** 2 + extent[2] ** 2) ** 0.5
         self._back_distance = max(diagonal * 1.5, 1.5)
-        self._height = max(extent[2], 0.3) + self._back_distance * 0.5
-        self._target_height = bbox_min[2] + extent[2] * 0.5
+        # 높이는 절대 좌표가 아니라 "로봇 몸통 기준 상대값"으로 둔다 - 험지에서는 로봇이 단차를
+        # 오르내리므로 고정 높이를 쓰면 로봇이 프레임 위아래로 잘려 나간다
+        self._eye_offset = max(extent[2], 0.3) * 0.5 + self._back_distance * 0.5
 
-    def pose(self, position: tuple[float, float], yaw: float) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-        """로봇의 현재 (x, y)·헤딩으로, 로봇 뒤에서 진행 방향을 바라보는 (eye, target) 월드 좌표를 만든다."""
+    def pose(
+        self, position: tuple[float, float], yaw: float, base_z: float
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        """로봇의 현재 (x, y, z)·헤딩으로, 로봇 뒤에서 진행 방향을 바라보는 (eye, target) 월드 좌표를 만든다."""
         eye = (
             position[0] - self._back_distance * math.cos(yaw),
             position[1] - self._back_distance * math.sin(yaw),
-            self._height,
+            base_z + self._eye_offset,
         )
-        target = (position[0], position[1], self._target_height)
+        target = (position[0], position[1], base_z)
         return eye, target
 
 
@@ -214,7 +242,8 @@ class _WheeledRobotTest:
             robot.update(self._sim.get_physics_dt())
 
             position_history.append(position)
-            self._record_step(chase_camera, position, yaw.item(), path, frames)
+            base_z = robot.data.root_pos_w[0, 2].item()
+            self._record_step(chase_camera, position, yaw.item(), base_z, path, frames)
             if path.is_finished:
                 break
 
@@ -224,12 +253,14 @@ class _WheeledRobotTest:
         clear_prim(_ROBOT_PRIM_PATH)
         return success
 
-    def _record_step(self, chase_camera: _ChaseCamera | None, position, yaw: float, path: Path2D, frames: list) -> None:
+    def _record_step(
+        self, chase_camera: _ChaseCamera | None, position, yaw: float, base_z: float, path: Path2D, frames: list
+    ) -> None:
         """목표 마커·카메라 시점을 갱신하고 프레임 하나를 모은다(파일럿 모드가 아니면 아무 것도 안 함)."""
         if self._goal_marker is not None:
             update_goal_marker(self._goal_marker, path.current_goal)
         if chase_camera is not None:
-            eye, target = chase_camera.pose(position, yaw)
+            eye, target = chase_camera.pose(position, yaw, base_z)
             set_camera_view(self._sim, self._camera, eye=eye, target=target)
             self._camera.update(dt=self._sim.get_physics_dt())
             frame = capture_camera_frame(self._camera)
@@ -315,13 +346,17 @@ class _WheeledRobotTest:
 
 
 class _LeggedRobotTest:
-    """legged 로봇 1종을 학습된 정책으로 ㄱ자 경로를 추종시키고 도달 여부를 판정한다."""
+    """legged 로봇 1종을 학습된 정책으로 구동해 본다 - 평지 경로 추종과 랜덤 험지 보행 둘 다.
+
+    두 조건은 지형이 다르지만 env는 하나만 만든다. 한 프로세스에서 ManagerBasedRLEnv를 두 번 만들면
+    멈추기 때문이다(env.close()가 USD prim을 남긴다). 대신 평지 타일과 험지 타일이 함께 있는 격자
+    지형을 만들어 두고 로봇을 타일 사이로 옮긴다 - Isaac Lab이 커리큘럼 승급을 처리하는 방식과 같다.
+    """
 
     def __init__(self, mode: str, device: str) -> None:
-        """파일럿/본 실행 여부를 저장한다 - legged는 로봇마다 독립된 env를 새로 만들어 재사용할 공유
-        카메라·씬이 없다.
+        """파일럿/본 실행 여부와 장치를 저장한다.
 
-        device를 넘기지 않으면 LocoRunner가 기본값 cuda:0으로 env를 만드는데, GPU 0~3에서 학습이
+        device를 넘기지 않으면 LocoRunner가 기본값 cuda:0으로 env를 만드는데, 여러 GPU에서 학습이
         동시에 돌고 있을 때 그 위에 카메라 렌더링까지 겹치면 03_controller_rl.py가 경고하는 것과
         같은 GPU 전력 스파이크 상황이 재현될 수 있다 - 그래서 항상 호출부가 명시한 device를 그대로 쓴다.
         """
@@ -329,13 +364,14 @@ class _LeggedRobotTest:
         self._device = device
 
     def run(self, sub_category: str, robot_id: str) -> bool:
-        """정책을 로드해 경로를 끝까지 쫓아가는지 시뮬레이션한다."""
-        from scripts.sim.controller.legged.loco_runner import LocoRunner
+        """정책을 로드해 평지 ㄱ자 경로를 추종시키고, 파일럿이면 랜덤 험지 직진까지 이어서 본다."""
+        from scripts.sim.controller.legged.loco_runner import TERRAIN_TEST, LocoRunner
+        from scripts.sim.controller.legged.rl.loco_rl_env import TEST_TERRAIN_FLAT, test_terrain_column
 
-        runner = LocoRunner(category=sub_category, robot_id=robot_id, num_envs=1, device=self._device)
-        runner.reset()
-        robot = runner.env.scene["robot"]
-
+        runner = LocoRunner(
+            category=sub_category, robot_id=robot_id, num_envs=1, device=self._device, terrain=TERRAIN_TEST
+        )
+        output_dir = _CHECK_DIR / "legged" / sub_category
         camera = spawn_capture_camera("/World/TestCamera") if self._mode == "pilot" else None
         goal_marker = spawn_goal_marker() if self._mode == "pilot" else None
         if camera is not None:
@@ -344,17 +380,44 @@ class _LeggedRobotTest:
             # 두면 초기화가 안 된다(_ALL_INDICES 같은 내부 속성이 없다는 에러로 나타난다) - reset()을
             # 한 번 더 호출해 새 play 이벤트를 만들어야 초기화된다.
             runner.env.sim.reset()
-        # legged 로봇은 학습 안전을 위해 지면 위로 살짝 띄워 스폰된다(scripts/sim/env/robot_spawn.py의
-        # ground_clearance) - 그 상태 그대로 카메라를 맞추면, 이후 중력으로 가라앉아 정착한 실제
-        # 높이와 어긋나 로봇이 화면에서 잘려 보인다. 정책으로 제자리에서 몇 스텝 서 있게 해 정착시킨
-        # 뒤에 그 자세를 기준으로 카메라를 맞춘다.
+        try:
+            runner.move_to_terrain_tile(test_terrain_column(TEST_TERRAIN_FLAT))
+            success = self._run_l_path(runner, robot_id, output_dir, camera, goal_marker)
+            if self._mode == "pilot":
+                # 직진 구간에는 목표 지점이 없다 - 마커를 지형 아래로 치워 화면에서 뺀다
+                update_goal_marker(goal_marker, (0.0, 0.0), height=_HIDDEN_MARKER_HEIGHT_M)
+                self._move_to_stairs_up_tile(runner, robot_id)
+                self._run_stairs_up(runner, robot_id, output_dir, camera)
+        finally:
+            runner.env.close()
+        return success
+
+    def _settle(self, runner) -> None:
+        """정책으로 제자리에 몇 스텝 서 있게 해 스폰 직후의 낙하를 정착시킨다.
+
+        legged 로봇은 학습 안전을 위해 지면 위로 살짝 띄워 스폰된다(scripts/sim/env/robot_spawn.py의
+        ground_clearance) - 그 상태 그대로 카메라를 맞추면, 이후 중력으로 가라앉아 정착한 실제 높이와
+        어긋나 로봇이 화면에서 잘려 보인다.
+        """
         settle_command = torch.zeros((1, 3), device=runner.env.device)
-        for _ in range(60):
+        for _ in range(_SETTLE_STEPS):
             runner.compute_joint_targets(settle_command)
 
-        start = (robot.data.root_pos_w[0, 0].item(), robot.data.root_pos_w[0, 1].item())
+    @staticmethod
+    def _robot_pose(robot) -> tuple[tuple[float, float], float, float]:
+        """로봇의 현재 (x, y), 헤딩(yaw), 몸통 높이(z)."""
+        position = (robot.data.root_pos_w[0, 0].item(), robot.data.root_pos_w[0, 1].item())
+        _, _, yaw = euler_xyz_from_quat(robot.data.root_quat_w[0:1])
+        return position, yaw.item(), robot.data.root_pos_w[0, 2].item()
+
+    def _run_l_path(self, runner, robot_id: str, output_dir: Path, camera, goal_marker) -> bool:
+        """평지 타일에서 ㄱ자 경로를 pure pursuit으로 추종시키고 도달 여부를 판정한다."""
+        self._settle(runner)
+        robot = runner.env.scene["robot"]
+        start, _, _ = self._robot_pose(robot)
         robot_prim_path = f"{runner.env.scene.env_prim_paths[0]}/Robot"
         chase_camera = _ChaseCamera(robot_prim_path) if camera is not None else None
+        self._warm_up_camera(runner, camera, chase_camera, robot)
 
         path: Path2D = generate_l_shaped_path(start, _LEG_LENGTH_M)
         # 기본 max_angular_velocity(4.5rad/s)는 바퀴 로봇 접지 마찰용 값이라, RL 정책이 실제로 학습한
@@ -362,32 +425,105 @@ class _LeggedRobotTest:
         tracker = PurePursuitTracker(max_angular_velocity=MAX_TRAINED_ANG_VEL_Z)
 
         position_history: list[tuple[float, float]] = []
-        frames = []
+        frames: list = []
         for _ in range(_NUM_STEPS[self._mode]):
-            position = (robot.data.root_pos_w[0, 0].item(), robot.data.root_pos_w[0, 1].item())
-            _, _, yaw = euler_xyz_from_quat(robot.data.root_quat_w[0:1])
-            linear_velocity, angular_velocity = tracker.compute_command(position, yaw.item(), path)
-            command = torch.tensor([[linear_velocity, 0.0, angular_velocity]], device=runner.env.device)
-            runner.compute_joint_targets(command)
-
+            position, yaw, base_z = self._robot_pose(robot)
+            linear_velocity, angular_velocity = tracker.compute_command(position, yaw, path)
+            runner.compute_joint_targets(
+                torch.tensor([[linear_velocity, 0.0, angular_velocity]], device=runner.env.device)
+            )
             position_history.append(position)
             if goal_marker is not None:
                 update_goal_marker(goal_marker, path.current_goal)
-            if chase_camera is not None:
-                eye, target = chase_camera.pose(position, yaw.item())
-                set_camera_view(runner.env.sim, camera, eye=eye, target=target)
-                camera.update(dt=runner.env.sim.get_physics_dt())
-                frame = capture_camera_frame(camera)
-                if frame is not None:
-                    frames.append(frame)
+            self._capture(runner, camera, chase_camera, position, yaw, base_z, frames)
             if path.is_finished:
                 break
 
         success = path.is_finished
         print(f"[controller_test] {robot_id} ㄱ자 경로 도달 -> {'성공' if success else '실패'}")
-        _save_check_outputs(_CHECK_DIR / "legged" / sub_category, robot_id, frames, start, path, position_history)
-        runner.env.close()
+        _save_check_outputs(output_dir, robot_id, frames, start, path, position_history)
         return success
+
+    def _move_to_stairs_up_tile(self, runner, robot_id: str) -> None:
+        """오르막 계단 타일로 옮긴다 - 계단 높이는 이 로봇이 학습에서 깬 단차에서 역산한다.
+
+        모든 로봇에 같은 행을 주면 능력이 다른데 난이도가 같아져, 약한 로봇에서는 넘어지는 장면만
+        남고 강한 로봇에서는 너무 쉬운 장면만 남는다. 클리어 단차를 기준으로 잡으면 "이 로봇 한계
+        근처의 계단"이라는 같은 의미의 영상이 로봇마다 나온다. 학습 결과가 없으면 비교 기준이 없으므로
+        가장 쉬운 행에 둔다.
+        """
+        from scripts.sim.controller.legged.rl.curriculum_driver import cleared_step_height_m
+        from scripts.sim.controller.legged.rl.loco_rl_env import (
+            TEST_TERRAIN_STAIRS_UP,
+            test_terrain_column,
+            test_terrain_stairs_up_row,
+        )
+
+        cleared_height = cleared_step_height_m(robot_id)
+        if cleared_height is None:
+            row = 0
+            print(f"[controller_test] {robot_id} 학습 결과가 없어 계단 지형을 가장 쉬운 행에 둔다")
+        else:
+            row = test_terrain_stairs_up_row(cleared_height)
+            print(f"[controller_test] {robot_id} 클리어 단차 {cleared_height:.3f}m -> 계단 지형 행 {row}")
+        runner.move_to_terrain_tile(test_terrain_column(TEST_TERRAIN_STAIRS_UP), row=row)
+
+    def _run_stairs_up(self, runner, robot_id: str, output_dir: Path, camera) -> None:
+        """오르막 계단에서 직진만 시켜 보행이 유지되는지 본다 - 판정이 아니라 눈으로 보는 확인이다.
+
+        경로 추종이 아니라 지형 대응만 보는 것이라 조향을 넣지 않는다(궤적 이미지도 남기지 않는다).
+        타일 중심이 구덩이 바닥이므로 어느 방향으로 직진해도 계단을 올라가게 된다.
+        넘어져 에피소드가 끝나면 그 자리에서 멈춘다 - 자동 리셋으로 순간이동한 뒤의 장면은 영상에
+        들어가면 안 된다.
+
+        수평 이동거리와 함께 올라간 높이를 찍는다 - 계단에서는 "얼마나 갔는가"보다 "몇 칸을
+        올랐는가"가 주파 능력을 직접 나타낸다.
+        """
+        self._settle(runner)
+        robot = runner.env.scene["robot"]
+        start, _, start_base_z = self._robot_pose(robot)
+        robot_prim_path = f"{runner.env.scene.env_prim_paths[0]}/Robot"
+        chase_camera = _ChaseCamera(robot_prim_path) if camera is not None else None
+        self._warm_up_camera(runner, camera, chase_camera, robot)
+
+        command = torch.tensor([[_STAIRS_LINEAR_VELOCITY, 0.0, 0.0]], device=runner.env.device)
+        frames: list = []
+        fell = False
+        for _ in range(_STAIRS_NUM_STEPS):
+            runner.compute_joint_targets(command)
+            position, yaw, base_z = self._robot_pose(robot)
+            self._capture(runner, camera, chase_camera, position, yaw, base_z, frames)
+            if bool(runner.env.termination_manager.terminated[0]):
+                fell = True
+                break
+
+        final_position, _, final_base_z = self._robot_pose(robot)
+        travelled = math.dist(final_position, start)
+        climbed = final_base_z - start_base_z
+        print(
+            f"[controller_test] {robot_id} 오르막 계단 직진 -> "
+            f"{'넘어짐' if fell else '완주'} (이동 {travelled:.2f}m, 상승 {climbed:.2f}m)"
+        )
+        _save_video(output_dir, f"{robot_id}_stairs_up.mp4", frames)
+
+    def _warm_up_camera(self, runner, camera, chase_camera: _ChaseCamera | None, robot) -> None:
+        """타일을 옮긴 직후의 지연 프레임을 버려, 영상 첫 장면이 옮기기 전 위치가 되지 않게 한다."""
+        for _ in range(_CAMERA_WARMUP_FRAMES):
+            position, yaw, base_z = self._robot_pose(robot)
+            self._capture(runner, camera, chase_camera, position, yaw, base_z, [])
+
+    def _capture(
+        self, runner, camera, chase_camera: _ChaseCamera | None, position, yaw: float, base_z: float, frames: list
+    ) -> None:
+        """추격 카메라를 로봇에 맞추고 프레임 하나를 모은다(파일럿 모드가 아니면 아무 것도 안 함)."""
+        if chase_camera is None:
+            return
+        eye, target = chase_camera.pose(position, yaw, base_z)
+        set_camera_view(runner.env.sim, camera, eye=eye, target=target)
+        camera.update(dt=runner.env.sim.get_physics_dt())
+        frame = capture_camera_frame(camera)
+        if frame is not None:
+            frames.append(frame)
 
 
 def main() -> None:

@@ -1,58 +1,74 @@
+# Isaac Lab 공식 UNITREE_GO1_CFG를 그대로 반영 - 물리적 사실만 여기 담는다.
+# URDF의 "base" 링크는 질량 0짜리 더미 참조 프레임이고 실제 몸통은 "trunk"다(a1과 같은 구조) -
+# 공식 config/go1/rough_env_cfg.py도 height_scanner/add_base_mass/base_contact를 전부 trunk에 건다.
+# 공식 액추에이터는 학습된 MLP 액추에이터망(ActuatorNetMLPCfg)이라 이 프로젝트 골격(implicit/
+# dc_motor)으로 재현할 수 없어, 그 cfg가 스펙시트에서 가져온 한계값(23.7N·m / 30rad/s)으로 DC 모터
+# 폴백을 만든다 - 게인은 같은 계열인 a1/go2의 공식 DCMotorCfg 값(25.0/0.5)을 쓴다.
+rl_preset: baseline
 usd_path: unitree_go1.usd
-base_body_name: base
+base_body_name: trunk
 foot_body_names: FL_foot|FR_foot|RL_foot|RR_foot
-undesired_contact_body_names: FL_calf|FR_calf|RL_calf|RR_calf
+undesired_contact_body_names: FL_thigh|FR_thigh|RL_thigh|RR_thigh
+hip_joint_names: .*_hip_joint
 actuator:
-  type: simple
+  model: dc_motor  # ActuatorNetMLPCfg의 effort/velocity/saturation 값을 그대로 쓴 폴백
   stiffness: 25.0
   damping: 0.5
-action:
-  type: position_only
-  scale: 0.25
-rewards:
-- name: track_lin_vel_xy_exp
-  weight: 1.5
-- name: track_ang_vel_z_exp
-  weight: 0.75
-- name: lin_vel_z_l2
-  weight: -2.0
-- name: ang_vel_xy_l2
-  weight: -0.05
-- name: dof_torques_l2
-  weight: -0.0002
-- name: dof_acc_l2
-  weight: -2.5e-07
-- name: action_rate_l2
-  weight: -0.01
-- name: feet_air_time_multi
-  weight: 0.01
-  params:
-    threshold: 0.5
-default_joint_pos_complete: true  # 아래 12개가 override 목록이 아니라 관절 전체에 대한 기본 자세다(Isaac Lab 공식 UNITREE_GO1_CFG 그대로)
+  effort_limit: 23.7
+  saturation_effort: 23.7
+  velocity_limit: 30.0
+# 스폰 시 베이스 높이(m) - Isaac Lab 공식 UNITREE_GO1_CFG.init_state.pos 값 그대로.
+# 비워두면 usd의 authored 자세 bbox로 추정하는데(0.4683), 이 로봇의 기본 자세는 웅크린 자세라
+# 추정값이 몇 cm 높게 잡혀 리셋마다 낙하한다.
+spawn_height: 0.40
+action_scale: 0.25
+# Isaac Lab 공식 UNITREE_GO1_CFG.init_state.joint_pos 그대로
+default_joint_pos_complete: true
 default_joint_pos:
-  FL_hip_joint: 0.1
-  RL_hip_joint: 0.1
-  FR_hip_joint: -0.1
-  RR_hip_joint: -0.1
+  .*L_hip_joint: 0.1
+  .*R_hip_joint: -0.1
   FL_thigh_joint: 0.8
   FR_thigh_joint: 0.8
   RL_thigh_joint: 1.0
   RR_thigh_joint: 1.0
-  FL_calf_joint: -1.5
-  FR_calf_joint: -1.5
-  RL_calf_joint: -1.5
-  RR_calf_joint: -1.5
-termination:
-- contact
-policy_architecture: mlp
-algorithm: ppo
-domain_randomization: basic
-agent:
-  num_envs: 4096
-  max_iterations: 1500
-  learning_rate: 0.001
-  entropy_coef: 0.01
-  hidden_dims:
-  - 512
-  - 256
-  - 128
+  .*_calf_joint: -1.5
+# Isaac Lab 공식 config/go1/rough_env_cfg.py 오버라이드 그대로 - push를 끄고, 리셋 시 베이스 속도
+# 랜덤화도 꺼서 위치·yaw만 랜덤화된 채로 스폰하고, 관절 초기 자세 랜덤화도 꺼서(1.0=고정) 정확한
+# 기본 자세로 시작하며, 베이스 질량은 -1.0~+3.0kg 덧셈으로 흔든다.
+domain_randomization:
+  reset_joint_position_range: [1.0, 1.0]
+  push_robot: false
+  reset_base_velocity_range:
+    x: [0.0, 0.0]
+    y: [0.0, 0.0]
+    z: [0.0, 0.0]
+    roll: [0.0, 0.0]
+    pitch: [0.0, 0.0]
+    yaw: [0.0, 0.0]
+  add_base_mass:
+    range: [-1.0, 3.0]
+    operation: add
+# 허벅지·정강이 접촉을 하중 지지로 볼 임계(N) - 체중 13.1kg의 1/4(32N)이다.
+# 이 값 아래의 스침은 벌점이 아니고, 그 부위로 딛고 서는 자세만 걸린다.
+undesired_contact_threshold_n: 32
+# 스윙 중 발이 지면에서 떨어져야 할 목표 높이(m) - 공식 Spot 태스크가 기립 0.5m에 0.10m를
+# 쓰는 비율(스폰 높이의 0.20배)을 이 로봇 스폰 높이 0.4m에 적용한 값이다.
+foot_clearance_target_m: 0.08
+# track_lin_vel_xy_exp/track_ang_vel_z_exp/feet_air_time/dof_torques_l2/dof_acc_l2는 공식
+# config/go1/rough_env_cfg.py가 부모(velocity_env_cfg.py) 기본값 위에 실제로 거는 오버라이드 값
+# 그대로. 나머지는 공식이 안 건드리는 부모 기본값 그대로. feet_stumble/hip_pos는 공식에 없는 이
+# 프로젝트의 Extreme Parkour 포팅 항목이라 a1/go2와 같은 값을 쓴다.
+reward_weights:
+  track_lin_vel_xy_exp: 1.5
+  track_ang_vel_z_exp: 0.75
+  lin_vel_z_l2: -2.0
+  ang_vel_xy_l2: -0.05
+  dof_torques_l2: -2.0e-4
+  dof_acc_l2: -2.5e-7
+  action_rate_l2: -0.01
+  feet_air_time: 0.01
+  undesired_contacts: -1.0
+  feet_clearance: -0.1
+  flat_orientation_l2: -1.0
+  feet_stumble: -0.5
+  hip_pos: -0.5

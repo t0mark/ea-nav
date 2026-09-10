@@ -8,7 +8,7 @@ rl_preset: baseline
 usd_path: bostondynamics_spot.usd
 base_body_name: body
 foot_body_names: fl_foot|fr_foot|hl_foot|hr_foot
-undesired_contact_body_names: fl_lleg|fr_lleg|hl_lleg|hr_lleg
+undesired_contact_body_names: fl_uleg|fr_uleg|hl_uleg|hr_uleg
 hip_joint_names: .*_hx
 # effort_limit이 없으면 PD 출력 토크가 무제한이 되어 다른 로봇(go2 23.5 / a1 33.5 / ANYmal 80 N·m)만
 # 토크 한계를 지는 불공정한 비교가 된다 - 공식 DelayedPDActuatorCfg의 45.0 N·m를 그대로 건다.
@@ -37,11 +37,12 @@ domain_randomization:
   add_base_mass:
     range: [-5.0, 5.0]
     operation: add
-# standard_quadruped: 공식 Spot 태스크는 완전히 별도 보상 모듈(config/spot/mdp/rewards.py)이라
-# 대조할 수 있는 부모 기본값 오버라이드가 없다 - 이 프로젝트에서 실측 검증된 값(ANYmal-D와 동일한
-# standard_quadruped 타입)을 그대로 쓴다. 몸집이 무거워(31.6kg) undesired_contacts를 켜도 지장 없다는
-# 것도 실측 확인.
-reward_type: standard_quadruped
+# 허벅지·정강이 접촉을 하중 지지로 볼 임계(N) - 체중 31.6kg의 1/4(77N)이다.
+# 이 값 아래의 스침은 벌점이 아니고, 그 부위로 딛고 서는 자세만 걸린다.
+undesired_contact_threshold_n: 77
+# 스윙 중 발이 지면에서 떨어져야 할 목표 높이(m) - 공식 Spot 태스크가 기립 0.5m에 0.10m를
+# 쓰는 비율(스폰 높이의 0.20배)을 이 로봇 스폰 높이 0.5m에 적용한 값이다.
+foot_clearance_target_m: 0.1
 reward_weights:
   track_lin_vel_xy_exp: 1.0
   track_ang_vel_z_exp: 0.5
@@ -52,8 +53,7 @@ reward_weights:
   action_rate_l2: -0.01
   feet_air_time: 0.125
   undesired_contacts: -1.0
-  feet_stumble: -1.0
+  feet_clearance: -0.1
+  flat_orientation_l2: -1.0
+  feet_stumble: -0.5
   hip_pos: -0.5
-# preset.algorithm 기본값 위에 Spot만 다른 키를 덮어쓴다(공식 spot/agents/rsl_rl_ppo_cfg.py의 낮은 entropy).
-agent:
-  entropy_coef: 0.0025

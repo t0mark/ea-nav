@@ -1,57 +1,69 @@
+# DeepRobotics X30 - 물리적 사실만 여기 담는다.
+# 이 로봇은 Isaac Lab 공식 자산에도, 제조사 RL 리포(DeepRoboticsLab/rl_training은 Lite3/M20/DR02만
+# 지원)에도 없어 대조할 공식 학습 설정이 없다. 그래서 액추에이터·관절 리밋 같은 물리적 사실은 URDF
+# 실측값과 제조사 사양으로 채우고, 보상은 같은 대형 4족인 ANYmal 계열·Spot과 동일한 세트를 쓴다
+# (4족 전체가 같은 preset을 공유해야 embodiment 비교가 성립한다).
+rl_preset: baseline
 usd_path: deeprobotics_x30.usd
 base_body_name: TORSO
 foot_body_names: FL_FOOT|FR_FOOT|HL_FOOT|HR_FOOT
-undesired_contact_body_names: FL_SHANK|FR_SHANK|HL_SHANK|HR_SHANK
+undesired_contact_body_names: FL_THIGH|FR_THIGH|HL_THIGH|HR_THIGH
+hip_joint_names: .*_HipX_joint
+# 토크·속도 한계가 관절군마다 다르다(URDF 실측: HipX/HipY 84N·m·17.5rad/s, Knee 150N·m·16.1rad/s).
+# Isaac Lab 액추에이터 cfg는 이 값들을 관절 정규식 dict로 받으므로 그대로 나눠 준다.
 actuator:
-  type: simple
+  model: implicit
   stiffness: 84.0
   damping: 1.68
-action:
-  type: position_only
-  scale: 0.5
-rewards:
-- name: track_lin_vel_xy_exp
-  weight: 1.0
-- name: track_ang_vel_z_exp
-  weight: 0.5
-- name: lin_vel_z_l2
-  weight: -2.0
-- name: ang_vel_xy_l2
-  weight: -0.05
-- name: dof_torques_l2
-  weight: -1.0e-05
-- name: dof_acc_l2
-  weight: -2.5e-07
-- name: action_rate_l2
-  weight: -0.01
-- name: flat_orientation_l2
-  weight: -1.0
-- name: dof_pos_limits
-  weight: -1.0
-- name: feet_air_time_multi
-  weight: 0.125
-  params:
-    threshold: 0.5
-- name: undesired_contacts
-  weight: -1.0
-  params:
-    threshold: 1.0
+  effort_limit:
+    .*_HipX_joint: 84.0
+    .*_HipY_joint: 84.0
+    .*_Knee_joint: 150.0
+  velocity_limit:
+    .*_HipX_joint: 17.5
+    .*_HipY_joint: 17.5
+    .*_Knee_joint: 16.1
+# 스폰 시 베이스 높이(m) - 공식 init pos가 없어 제조사 사양의 기립 높이 470mm를 쓴다(URDF 질량
+# 55.84kg이 사양 56kg과 일치해 같은 기체임을 확인). Isaac Lab이 go2(사양 ~400mm -> 0.40)에 적용하는
+# 규약과 같다. 비워두면 usd bbox 추정값(0.669)이 잡혀 리셋마다 20cm씩 낙하한다.
+spawn_height: 0.47
+# 좌우 벌림 관절은 더 낮춘다 - hip이 크게 벌어지면 55.8kg 몸통의 지지 다각형이 무너지고, 그 벌점이
+# 추종 보상을 덮으면 정책이 탐색을 포기하는 쪽(표준편차 축소)으로 수렴한다. 나머지 관절은 같은
+# 대형 4족인 Spot(0.2)과 ANYmal(0.5) 사이에 두어 무거운 몸통이 한 스텝에 옮길 수 있는 폭으로 맞춘다.
+action_scale:
+  .*_HipX_joint: 0.125
+  ^(?!.*_HipX_joint).*$: 0.25
+# Knee 가동범위가 [0.35, 2.53]으로 0을 포함하지 않아 반드시 값을 줘야 한다(0이면 스폰 시 리밋 이탈).
+# HipX·HipY는 0이 가동범위 안이라 나머지 관절 와일드카드가 0.0으로 채운다.
+default_joint_pos_complete: false
 default_joint_pos:
   FL_Knee_joint: 1.44
   FR_Knee_joint: 1.44
   HL_Knee_joint: 1.44
   HR_Knee_joint: 1.44
-termination:
-- contact
-policy_architecture: mlp
-algorithm: ppo
-domain_randomization: basic
-agent:
-  num_envs: 4096
-  max_iterations: 1500
-  learning_rate: 0.001
-  entropy_coef: 0.01
-  hidden_dims:
-  - 512
-  - 256
-  - 128
+# 대조할 공식 이벤트 설정이 없어, 같은 대형 4족인 ANYmal 계열이 쓰는 Isaac Lab 공식
+# velocity_env_cfg.py 기본값(덧셈 -5~+5kg)을 그대로 쓴다.
+domain_randomization:
+  add_base_mass:
+    range: [-5.0, 5.0]
+    operation: add
+# 허벅지·정강이 접촉을 하중 지지로 볼 임계(N) - 체중 55.8kg의 1/4(137N)이다.
+# 이 값 아래의 스침은 벌점이 아니고, 그 부위로 딛고 서는 자세만 걸린다.
+undesired_contact_threshold_n: 137
+# 스윙 중 발이 지면에서 떨어져야 할 목표 높이(m) - 공식 Spot 태스크가 기립 0.5m에 0.10m를
+# 쓰는 비율(스폰 높이의 0.20배)을 이 로봇 스폰 높이 0.47m에 적용한 값이다.
+foot_clearance_target_m: 0.09
+reward_weights:
+  track_lin_vel_xy_exp: 1.0
+  track_ang_vel_z_exp: 0.5
+  lin_vel_z_l2: -2.0
+  ang_vel_xy_l2: -0.05
+  dof_torques_l2: -1.0e-5
+  dof_acc_l2: -2.5e-7
+  action_rate_l2: -0.01
+  feet_air_time: 0.125
+  undesired_contacts: -1.0
+  feet_clearance: -0.1
+  flat_orientation_l2: -1.0
+  feet_stumble: -0.5
+  hip_pos: -0.5

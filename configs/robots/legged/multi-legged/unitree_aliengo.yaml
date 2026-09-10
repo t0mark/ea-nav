@@ -1,48 +1,82 @@
-# InternRobotics/HIMLoco 공식 리포(legged_gym/envs/aliengo/aliengo_config.py)를 재클론해 재검증
-# 후 반영했다(전용 IsaacLab 포트는 없어 이 legged_gym 리포가 최선의 근거). joint_power·
-# foot_clearance·smoothness는 이 리포 전용 커스텀 보상이라 뺐다. torques/dof_pos_limits/
-# feet_air_time/collision은 원본 자체가 weight 0(비활성)이라 우리도 뺐다.
-# foot_body_names는 CALF다 - 이 USD에는 별도 FOOT 링크가 없고(실측: RigidBody 링크가 hip/thigh/
-# calf에서 끝남) unitree_laikago와 같은 구조다.
+# Unitree Aliengo - 물리적 사실만 여기 담는다.
+# 이 로봇은 Isaac Lab 공식 자산에 없다(공식은 a1/go1/go2만 있음). 그래서 대조할 공식 학습 설정이
+# 없고, 액추에이터·관절 리밋은 URDF 실측값으로 채운다. 구조는 a1/go2와 동일한 Unitree 4족
+# (hip/thigh/calf)이라 기본 자세·액션 스케일·보상은 같은 계열의 Isaac Lab 공식 규약을 따른다.
+rl_preset: baseline
 usd_path: unitree_aliengo.usd
+# URDF의 fixed joint 병합으로 정강이에 흡수됐던 FOOT을 별도 강체로 복원한 USD다(원본은 _merged_foot/).
+# 발 콜리전 구를 새 강체로 옮기고 정강이-발 고정 조인트를 넣었으며, 총 질량은 보존했다.
 base_body_name: base
-foot_body_names: FL_calf|FR_calf|RL_calf|RR_calf
-# undesired_contact_body_names 없음 - 원본의 penalize_contacts_on(thigh/calf/base)은 실제 weight가
-# 0(비활성)이라 undesired_contacts 보상 자체를 안 쓴다.
+foot_body_names: FL_foot_link|FR_foot_link|RL_foot_link|RR_foot_link
+undesired_contact_body_names: FL_thigh|FR_thigh|RL_thigh|RR_thigh
+hip_joint_names: .*_hip_joint
+# 토크·속도 한계가 관절군마다 다르다(URDF 실측: hip/thigh 35.278N·m·20rad/s, calf 44.4N·m·15.89rad/s).
+# effort_limit·velocity_limit은 관절 정규식 dict를 받지만 saturation_effort는 스칼라뿐이라, 최댓값
+# (44.4)을 피크 토크로 두고 관절별 effort_limit으로 클램프한다 - DCMotor는 속도에 따라 감소한
+# 토크를 effort_limit으로 다시 자르므로 hip/thigh는 35.278에서 정확히 잘린다.
 actuator:
-  type: simple
+  model: dc_motor  # a1/go2와 같은 Unitree 계열 모터 모델(토크·속도 포화 반영)
   stiffness: 40.0
   damping: 2.0
-action:
-  type: position_only
-  scale: 0.5
-rewards:
-- name: track_lin_vel_xy_exp
-  weight: 1.0
-- name: track_ang_vel_z_exp
-  weight: 0.5
-- name: lin_vel_z_l2
-  weight: -2.0
-- name: ang_vel_xy_l2
-  weight: -0.05
-- name: flat_orientation_l2
-  weight: -0.2
-- name: dof_acc_l2
-  weight: -2.5e-07
-- name: action_rate_l2
-  weight: -0.01
-- name: base_height_l2
-  weight: -1.0
-  params:
-    target_height: 0.30
-termination:
-- contact
-policy_architecture: mlp
-algorithm: ppo
-domain_randomization: basic
-agent:
-  num_envs: 4096
-  max_iterations: 1500
-  learning_rate: 0.001
-  entropy_coef: 0.01
-  hidden_dims: [512, 256, 128]
+  saturation_effort: 44.4
+  effort_limit:
+    .*_hip_joint: 35.278
+    .*_thigh_joint: 35.278
+    .*_calf_joint: 44.4
+  velocity_limit:
+    .*_hip_joint: 20.0
+    .*_thigh_joint: 20.0
+    .*_calf_joint: 15.89
+# 스폰 시 베이스 높이(m) - 공식 자산이 없어 참조할 init pos가 없다. usd bbox 추정값(0.5465)은
+# authored 자세(다리 편 상태) 기준이라 실제 기본 자세보다 높게 잡히는데, 공식값이 있는 로봇들의
+# 추정/공식 비율(go2 1.17, a1 1.05, anymal_d 1.17 - 평균 1.13)로 나눠 0.48로 둔다.
+# 발이 calf에 병합된 USD라 발 위치를 직접 잴 수 없어(최저 바디 원점이 무릎) 이 보정을 쓴다.
+spawn_height: 0.48
+action_scale: 0.25
+# Isaac Lab 공식 UNITREE_A1_CFG/UNITREE_GO2_CFG와 같은 자세 - 같은 형태의 Unitree 4족이고, 세 값
+# 모두 이 로봇의 URDF 리밋 안에 있다(hip ±0.1 in [-1.22,1.22], calf -1.5 in [-2.78,-0.65],
+# thigh는 continuous라 제한 없음). calf는 0이 리밋 밖이라 반드시 지정해야 한다.
+default_joint_pos_complete: true
+default_joint_pos:
+  .*L_hip_joint: 0.1
+  .*R_hip_joint: -0.1
+  FL_thigh_joint: 0.8
+  FR_thigh_joint: 0.8
+  RL_thigh_joint: 1.0
+  RR_thigh_joint: 1.0
+  .*_calf_joint: -1.5
+# 대조할 공식 이벤트 설정이 없어, 같은 Unitree 4족인 a1/go2의 Isaac Lab 공식 오버라이드를 그대로
+# 쓴다(push 끄기, 관절 초기자세 고정, 리셋 속도 0, 질량 -1~+3kg).
+domain_randomization:
+  reset_joint_position_range: [1.0, 1.0]
+  push_robot: false
+  reset_base_velocity_range:
+    x: [0.0, 0.0]
+    y: [0.0, 0.0]
+    z: [0.0, 0.0]
+    roll: [0.0, 0.0]
+    pitch: [0.0, 0.0]
+    yaw: [0.0, 0.0]
+  add_base_mass:
+    range: [-1.0, 3.0]
+    operation: add
+# 허벅지·정강이 접촉을 하중 지지로 볼 임계(N) - 체중 24.9kg의 1/4(61N)이다.
+# 이 값 아래의 스침은 벌점이 아니고, 그 부위로 딛고 서는 자세만 걸린다.
+undesired_contact_threshold_n: 61
+# 스윙 중 발이 지면에서 떨어져야 할 목표 높이(m) - 공식 Spot 태스크가 기립 0.5m에 0.10m를
+# 쓰는 비율(스폰 높이의 0.20배)을 이 로봇 스폰 높이 0.48m에 적용한 값이다.
+foot_clearance_target_m: 0.1
+reward_weights:
+  track_lin_vel_xy_exp: 1.5
+  track_ang_vel_z_exp: 0.75
+  lin_vel_z_l2: -2.0
+  ang_vel_xy_l2: -0.05
+  dof_torques_l2: -2.0e-4
+  dof_acc_l2: -2.5e-7
+  action_rate_l2: -0.01
+  feet_air_time: 0.01
+  undesired_contacts: -1.0
+  feet_clearance: -0.1
+  flat_orientation_l2: -1.0
+  feet_stumble: -0.5
+  hip_pos: -0.5

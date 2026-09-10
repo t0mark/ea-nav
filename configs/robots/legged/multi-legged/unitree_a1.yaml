@@ -5,7 +5,7 @@
 usd_path: unitree_a1.usd
 base_body_name: trunk
 foot_body_names: FL_foot|FR_foot|RL_foot|RR_foot
-undesired_contact_body_names: FL_calf|FR_calf|RL_calf|RR_calf
+undesired_contact_body_names: FL_thigh|FR_thigh|RL_thigh|RR_thigh
 hip_joint_names: .*_hip_joint
 actuator:
   model: dc_motor
@@ -18,7 +18,12 @@ actuator:
 # 비워두면 usd의 authored 자세 bbox로 추정하는데, 이 로봇의 기본 자세는 웅크린 자세라
 # 추정값이 몇 cm 높게 잡혀 리셋마다 낙하한다.
 spawn_height: 0.42
-action_scale: 0.25
+# 좌우 벌림 관절만 액션 스케일을 낮춘다 - hip이 크게 벌어지면 네 발이 만드는 지지 다각형이 좁아져
+# 자세가 무너지고, hip_pos 벌점이 추종 보상을 덮어 제자리에 서 있는 국소 최적이 잡힌다.
+# 나머지 관절은 Isaac Lab 공식 UNITREE_A1_CFG의 0.25를 그대로 쓴다.
+action_scale:
+  .*_hip_joint: 0.125
+  ^(?!.*_hip_joint).*$: 0.25
 # Isaac Lab 공식 UNITREE_A1_CFG.init_state.joint_pos 그대로
 default_joint_pos_complete: true
 default_joint_pos:
@@ -43,10 +48,12 @@ domain_randomization:
   add_base_mass:
     range: [-1.0, 3.0]
     operation: add
-# light_quadruped: 가볍고 토크가 작은 4족이라 undesired_contacts(허벅지·정강이 접촉 벌점)를 켜두면
-# 정상 보행 중의 스침까지 벌점 먹어 "안 움직이는" local optimum에 빠진다 - Isaac Lab 공식
-# config/a1/rough_env_cfg.py도 이 항목을 끈다(scripts/.../rl/rewards.py의 LightQuadrupedRewards).
-reward_type: light_quadruped
+# 허벅지·정강이 접촉을 하중 지지로 볼 임계(N) - 체중 13.7kg의 1/4(34N)이다.
+# 이 값 아래의 스침은 벌점이 아니고, 그 부위로 딛고 서는 자세만 걸린다.
+undesired_contact_threshold_n: 34
+# 스윙 중 발이 지면에서 떨어져야 할 목표 높이(m) - 공식 Spot 태스크가 기립 0.5m에 0.10m를
+# 쓰는 비율(스폰 높이의 0.20배)을 이 로봇 스폰 높이 0.42m에 적용한 값이다.
+foot_clearance_target_m: 0.08
 # track_lin_vel_xy_exp/track_ang_vel_z_exp/feet_air_time/dof_torques_l2는 Isaac Lab 공식
 # config/a1/rough_env_cfg.py가 부모(velocity_env_cfg.py) 기본값 위에 실제로 거는 오버라이드 값
 # 그대로(1.5/0.75/0.01/-0.0002 - a1 실제 토크 스케일 33.5N·m에 맞춘 값). 나머지(lin_vel_z_l2 등)는
@@ -57,14 +64,12 @@ reward_weights:
   track_ang_vel_z_exp: 0.75
   lin_vel_z_l2: -2.0
   ang_vel_xy_l2: -0.05
-  dof_torques_l2: -0.0002
+  dof_torques_l2: -2.0e-4
   dof_acc_l2: -2.5e-7
   action_rate_l2: -0.01
   feet_air_time: 0.01
-  feet_stumble: -1.0
+  undesired_contacts: -1.0
+  feet_clearance: -0.1
+  flat_orientation_l2: -1.0
+  feet_stumble: -0.5
   hip_pos: -0.5
-agent:
-  num_envs: 4096
-  max_iterations: 1500
-  learning_rate: 0.001
-  entropy_coef: 0.01

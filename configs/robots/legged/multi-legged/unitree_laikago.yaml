@@ -1,68 +1,82 @@
-# Laikago 전용 PPO velocity-tracking 학습 리포는 없다(unitree_rl_gym/legged_gym/HIMLoco/
-# DeepRoboticsLab 등 재확인, 흔적 없음) - 있는 건 erwincoumans/motion_imitation(Google Research,
-# 모션캡처 리타겟 모방학습) 뿐이라 reward/알고리즘은 대조 불가능하지만, laikago.py/
-# laikago_constants.py의 실제 하드웨어 PD 게인(ABDUCTION_P/D_GAIN, HIP_P/D_GAIN, KNEE_P/D_GAIN)은
-# 재클론해 확인한 실측치라 반영했다 - stiffness는 관절 전부 220으로 균일하지만 damping은 hip_joint
-# (abduction)만 0.3이고 thigh/calf(hip flexion/knee)는 2.0으로 갈린다.
+# Unitree Laikago - 물리적 사실만 여기 담는다.
+# 이 로봇은 Isaac Lab 공식 자산에도, 전용 RL 학습 리포에도 없다(morphology 일반화 리포인 GenLoco에
+# 포함될 뿐 전용 설정이 없음). 그래서 대조할 공식 학습 설정이 없고, 관절 리밋·토크는 URDF
+# 실측값으로 채운다. 구조는 a1/go2와 같은 Unitree 4족(hip/thigh/calf, trunk)이라 기본 자세·액션
+# 스케일·보상은 질량이 거의 같은 aliengo(24.9kg)와 같은 처리를 한다.
+rl_preset: baseline
 usd_path: unitree_laikago.usd
+# URDF의 fixed joint 병합으로 정강이에 흡수됐던 FOOT을 별도 강체로 복원한 USD다(원본은 _merged_foot/).
+# 발 콜리전 구를 새 강체로 옮기고 정강이-발 고정 조인트를 넣었으며, 총 질량은 보존했다.
 base_body_name: trunk
-foot_body_names: FL_calf|FR_calf|RL_calf|RR_calf
+foot_body_names: FL_foot_link|FR_foot_link|RL_foot_link|RR_foot_link
 undesired_contact_body_names: FL_thigh|FR_thigh|RL_thigh|RR_thigh
+hip_joint_names: .*_hip_joint
+# 토크·속도 한계가 관절군마다 다르다(URDF 실측: hip 20N·m·52.4rad/s, thigh/calf 55N·m·28.6rad/s).
+# saturation_effort는 스칼라뿐이라 최댓값(55)을 피크로 두고 관절별 effort_limit으로 클램프한다.
+# stiffness/damping은 참조할 공식값이 없어, 질량이 거의 같은 aliengo(24.9kg, 40.0/2.0)와 맞춘다 -
+# 이 계열의 게인은 질량에 대략 비례한다(go2 15kg:25, a1 12.5kg:25, aliengo 24.9kg:40, b2 74.6kg:160).
 actuator:
-  type: grouped
-  groups:
-  - pattern: .*_hip_joint
-    stiffness: 220.0
-    damping: 0.3
-  - pattern: .*_thigh_joint|.*_calf_joint
-    stiffness: 220.0
-    damping: 2.0
-action:
-  type: position_only
-  scale: 0.5
-rewards:
-- name: track_lin_vel_xy_exp
-  weight: 1.0
-- name: track_ang_vel_z_exp
-  weight: 0.5
-- name: lin_vel_z_l2
-  weight: -2.0
-- name: ang_vel_xy_l2
-  weight: -0.05
-- name: dof_torques_l2
-  weight: -1.0e-05
-- name: dof_acc_l2
-  weight: -2.5e-07
-- name: action_rate_l2
-  weight: -0.01
-- name: flat_orientation_l2
-  weight: -1.0
-- name: dof_pos_limits
-  weight: -1.0
-- name: feet_air_time_multi
-  weight: 0.125
-  params:
-    threshold: 0.5
-- name: undesired_contacts
-  weight: -1.0
-  params:
-    threshold: 1.0
+  model: dc_motor  # a1/go2와 같은 Unitree 계열 모터 모델(토크·속도 포화 반영)
+  stiffness: 40.0
+  damping: 2.0
+  saturation_effort: 55.0
+  effort_limit:
+    .*_hip_joint: 20.0
+    .*_thigh_joint: 55.0
+    .*_calf_joint: 55.0
+  velocity_limit:
+    .*_hip_joint: 52.4
+    .*_thigh_joint: 28.6
+    .*_calf_joint: 28.6
+# 스폰 시 베이스 높이(m) - 공식 자산이 없어 참조할 init pos가 없다. usd bbox 추정값(0.547)과, 그것을
+# 공식값 보유 로봇들의 추정/공식 비율(평균 1.13)로 나눈 0.48은 둘 다 너무 높아 기본 자세 유지 검증에서
+# 쓰러진다(실측: base 접촉 164N). 0.40에서 정상 기립(정착 높이 0.342m)하는 것을 확인해 그 값을 쓴다.
+spawn_height: 0.40
+action_scale: 0.25
+# Isaac Lab 공식 UNITREE_A1_CFG/UNITREE_GO2_CFG와 같은 자세 - 같은 형태의 Unitree 4족이고, 세 값
+# 모두 이 로봇의 URDF 리밋 안에 있다(좌측 hip 0.1 in [-0.87,1.05], 우측 -0.1 in [-1.05,0.87],
+# thigh 0.8/1.0 in [-0.52,3.93], calf -1.5 in [-2.78,-0.61]). calf는 0이 리밋 밖이라 필수다.
+default_joint_pos_complete: true
 default_joint_pos:
-  FL_calf_joint: -1.69297
-  FR_calf_joint: -1.69297
-  RL_calf_joint: -1.69297
-  RR_calf_joint: -1.69297
-termination:
-- contact
-policy_architecture: mlp
-algorithm: ppo
-domain_randomization: basic
-agent:
-  num_envs: 4096
-  max_iterations: 1500
-  learning_rate: 0.001
-  entropy_coef: 0.01
-  hidden_dims:
-  - 512
-  - 256
-  - 128
+  .*L_hip_joint: 0.1
+  .*R_hip_joint: -0.1
+  FL_thigh_joint: 0.8
+  FR_thigh_joint: 0.8
+  RL_thigh_joint: 1.0
+  RR_thigh_joint: 1.0
+  .*_calf_joint: -1.5
+# 대조할 공식 이벤트 설정이 없어, 같은 Unitree 4족인 a1/go2의 Isaac Lab 공식 오버라이드를 그대로
+# 쓴다(push 끄기, 관절 초기자세 고정, 리셋 속도 0, 질량 -1~+3kg).
+domain_randomization:
+  reset_joint_position_range: [1.0, 1.0]
+  push_robot: false
+  reset_base_velocity_range:
+    x: [0.0, 0.0]
+    y: [0.0, 0.0]
+    z: [0.0, 0.0]
+    roll: [0.0, 0.0]
+    pitch: [0.0, 0.0]
+    yaw: [0.0, 0.0]
+  add_base_mass:
+    range: [-1.0, 3.0]
+    operation: add
+# 허벅지·정강이 접촉을 하중 지지로 볼 임계(N) - 체중 25.4kg의 1/4(62N)이다.
+# 이 값 아래의 스침은 벌점이 아니고, 그 부위로 딛고 서는 자세만 걸린다.
+undesired_contact_threshold_n: 62
+# 스윙 중 발이 지면에서 떨어져야 할 목표 높이(m) - 공식 Spot 태스크가 기립 0.5m에 0.10m를
+# 쓰는 비율(스폰 높이의 0.20배)을 이 로봇 스폰 높이 0.4m에 적용한 값이다.
+foot_clearance_target_m: 0.08
+reward_weights:
+  track_lin_vel_xy_exp: 1.5
+  track_ang_vel_z_exp: 0.75
+  lin_vel_z_l2: -2.0
+  ang_vel_xy_l2: -0.05
+  dof_torques_l2: -2.0e-4
+  dof_acc_l2: -2.5e-7
+  action_rate_l2: -0.01
+  feet_air_time: 0.01
+  undesired_contacts: -1.0
+  feet_clearance: -0.1
+  flat_orientation_l2: -1.0
+  feet_stumble: -0.5
+  hip_pos: -0.5

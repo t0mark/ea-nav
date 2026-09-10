@@ -8,7 +8,7 @@
 rl_preset: baseline
 usd_path: anybotics_anymal_d.usd
 base_body_name: base
-foot_body_names: LF_SHANK|LH_SHANK|RF_SHANK|RH_SHANK
+foot_body_names: LF_FOOT|LH_FOOT|RF_FOOT|RH_FOOT
 undesired_contact_body_names: LF_THIGH|LH_THIGH|RF_THIGH|RH_THIGH
 hip_joint_names: .*HAA
 # 이 USD에는 다리 12관절(HAA/HFE/KFE) 외에 카메라 페이로드 마운트 관절
@@ -44,11 +44,12 @@ domain_randomization:
   add_base_mass:
     range: [-5.0, 5.0]
     operation: add
-# standard_quadruped: 무겁고 토크가 큰 4족이라 undesired_contacts(허벅지·정강이 접촉 벌점)를 켜도
-# 정상 보행에 지장이 없다 - Isaac Lab 공식 anymal_d/rough_env_cfg.py는 이 항목을 포함해 부모
-# (velocity_env_cfg.py) 보상 기본값을 아무 것도 오버라이드하지 않는다(scripts/.../rl/rewards.py의
-# StandardQuadrupedRewards). 아래 숫자는 전부 그 부모 기본값 그대로.
-reward_type: standard_quadruped
+# 허벅지·정강이 접촉을 하중 지지로 볼 임계(N) - 체중 57.0kg의 1/4(140N)이다.
+# 이 값 아래의 스침은 벌점이 아니고, 그 부위로 딛고 서는 자세만 걸린다.
+undesired_contact_threshold_n: 140
+# 스윙 중 발이 지면에서 떨어져야 할 목표 높이(m) - 공식 Spot 태스크가 기립 0.5m에 0.10m를
+# 쓰는 비율(스폰 높이의 0.20배)을 이 로봇 스폰 높이 0.6m에 적용한 값이다.
+foot_clearance_target_m: 0.12
 reward_weights:
   track_lin_vel_xy_exp: 1.0
   track_ang_vel_z_exp: 0.5
@@ -59,8 +60,7 @@ reward_weights:
   action_rate_l2: -0.01
   feet_air_time: 0.125
   undesired_contacts: -1.0
-  feet_stumble: -1.0
+  feet_clearance: -0.1
+  flat_orientation_l2: -1.0
+  feet_stumble: -0.5
   hip_pos: -0.5
-# preset.algorithm 기본값 위에 anymal 계열만 다른 키를 덮어쓴다(Isaac Lab 공식 anymal_d가 쓰는 낮은 entropy).
-agent:
-  entropy_coef: 0.005

@@ -28,7 +28,7 @@ class RLPreset:
 
     observations/rewards/terminations/events/action은 scripts/.../rl/{모듈}.py 레지스트리에 등록된
     이름이고, build_loco_rl_env_cfg()가 그 이름으로 빌더를 골라 조립한다. algorithm/curriculum은
-    딕셔너리 그대로 들고 있다가 agent_cfg.build_agent_cfg()·rl_trainer.py의 StageTrainer가 읽는다.
+    딕셔너리 그대로 들고 있다가 agent_cfg.build_agent_cfg()·rl_trainer.py의 CurriculumTrainer가 읽는다.
     """
 
     observations: str
@@ -77,9 +77,12 @@ class RobotProfile:
     actuator: dict
     action_scale: float
     domain_randomization: dict
-    # "light_quadruped" | "standard_quadruped" - scripts/.../rl/rewards.py의 RewardBuilder 서브클래스
-    # 중 어느 걸 쓸지 고르는 물리적 사실(허벅지·정강이 접촉이 정상 보행에서도 잦은 몸집인지).
-    reward_type: str
+    # 허벅지·정강이 접촉을 "하중 지지"로 볼 접촉력 임계(N). 대략 체중의 1/4로, 보행 중의 스침과
+    # 그 부위로 딛고 서는 자세를 가르는 값이다(scripts/.../rl/rewards.py의 undesired_contacts).
+    undesired_contact_threshold_n: float
+    # 스윙 중인 발이 지면에서 떨어져야 할 목표 높이(m) - 로봇 체구에 비례하는 물리적 사실이다.
+    # 공식 Spot 태스크가 기립 높이 0.5m에 0.10m를 쓰므로 스폰 높이의 0.20배를 기준으로 잡는다.
+    foot_clearance_target_m: float
     # 보상 항목별 가중치 - rewards.py는 이 딕셔너리 값만 그대로 쓰고 코드 쪽 기본값을 두지 않는다.
     reward_weights: dict[str, float]
     # 이 로봇이 가리키는 RL 설계 번들 이름(configs/rl/legged/presets/{rl_preset}.yaml).
@@ -110,7 +113,8 @@ class RobotProfile:
             actuator=raw["actuator"],
             action_scale=raw.get("action_scale", 0.25),
             domain_randomization=raw.get("domain_randomization") or {},
-            reward_type=raw["reward_type"],
+            undesired_contact_threshold_n=raw["undesired_contact_threshold_n"],
+            foot_clearance_target_m=raw["foot_clearance_target_m"],
             reward_weights=raw["reward_weights"],
             rl_preset=raw.get("rl_preset", "baseline"),
             agent=raw.get("agent") or {},

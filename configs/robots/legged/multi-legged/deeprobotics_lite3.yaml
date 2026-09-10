@@ -8,7 +8,7 @@ rl_preset: baseline
 usd_path: deeprobotics_lite3.usd
 base_body_name: TORSO
 foot_body_names: FL_FOOT|FR_FOOT|HL_FOOT|HR_FOOT
-undesired_contact_body_names: FL_SHANK|FR_SHANK|HL_SHANK|HR_SHANK
+undesired_contact_body_names: FL_THIGH|FR_THIGH|HL_THIGH|HR_THIGH
 hip_joint_names: .*_HipX_joint
 # 토크·속도 한계가 관절군마다 다르다(URDF 실측: HipX/HipY 24N·m·26.2rad/s, Knee 36N·m·17.3rad/s).
 # Isaac Lab 액추에이터 cfg는 이 값들을 관절 정규식 dict로 받으므로 그대로 나눠 준다.
@@ -56,19 +56,23 @@ domain_randomization:
   add_base_mass:
     range: [-1.0, 3.0]
     operation: add
-# light_quadruped: 11.94kg으로 이 워크스페이스에서 가장 가벼운 4족이다 - go2(16.1kg)·a1보다도
-# 가벼워 undesired_contacts를 켜면 정상 보행 중 스침까지 벌점을 먹는다(scripts/.../rl/rewards.py의
-# LightQuadrupedRewards). 가중치는 같은 경량 4족인 go2/a1과 동일한 값을 쓴다 - 토크 스케일도
-# 비슷하다(lite3 24~36N·m, go2 23.5N·m, a1 33.5N·m).
-reward_type: light_quadruped
+# 허벅지·정강이 접촉을 하중 지지로 볼 임계(N) - 체중 11.9kg의 1/4(29N)이다.
+# 이 값 아래의 스침은 벌점이 아니고, 그 부위로 딛고 서는 자세만 걸린다.
+undesired_contact_threshold_n: 29
+# 스윙 중 발이 지면에서 떨어져야 할 목표 높이(m) - 공식 Spot 태스크가 기립 0.5m에 0.10m를
+# 쓰는 비율(스폰 높이의 0.20배)을 이 로봇 스폰 높이 0.4m에 적용한 값이다.
+foot_clearance_target_m: 0.08
 reward_weights:
   track_lin_vel_xy_exp: 1.5
   track_ang_vel_z_exp: 0.75
   lin_vel_z_l2: -2.0
   ang_vel_xy_l2: -0.05
-  dof_torques_l2: -0.0002
+  dof_torques_l2: -2.0e-4
   dof_acc_l2: -2.5e-7
   action_rate_l2: -0.01
   feet_air_time: 0.01
-  feet_stumble: -1.0
+  undesired_contacts: -1.0
+  feet_clearance: -0.1
+  flat_orientation_l2: -1.0
+  feet_stumble: -0.5
   hip_pos: -0.5
